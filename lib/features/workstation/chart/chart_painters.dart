@@ -1,0 +1,820 @@
+import 'dart:math' as math;
+import 'dart:ui' show clampDouble;
+
+import 'package:flutter/material.dart';
+
+import '../../../core/theme/chart_theme.dart';
+import '../../../domain/models/candle.dart';
+import '../../../domain/models/drawing.dart';
+import '../../../domain/models/order.dart';
+import 'chart_viewport.dart';
+
+// Helper: keeps time grid density readable regardless of zoom level
+int computeTimeStep(double visibleBars) {
+  if (visibleBars <= 25) return 5;
+  if (visibleBars <= 60) return 10;
+  if (visibleBars <= 140) return 20;
+  if (visibleBars <= 300) return 50;
+  return 100;
+}
+
+// ============================================================================
+// PAINTER A: MAIN CHART CANVAS (Background + Gridlines + Candles + Paths + Crosshair)
+// ============================================================================
+class MainChartPainter extends CustomPainter {
+  final List<Candle> candles;
+  final ChartViewport viewport;
+  final Offset? cursorPos;
+  final ChartTheme theme;
+  final List<CrossTimeframePath> paths;
+  final CrossTimeframePath? activePath;
+  final List<double?>? ema20;
+  final List<double?>? ema50;
+  final List<double?>? ema200;
+  final DateTimeRange? syncedCursorRange;
+  final Duration? barDuration;
+  final bool showVolume;
+  final OpenPosition? openPosition;
+  final List<PendingOrder> pendingOrders;
+  final List<CompletedTrade> closedTrades;
+  final String? selectedPathId;
+  final int? selectedPointIndex;
+  final DateTimeRange? highlightedRange;
+
+  MainChartPainter({
+    required this.candles,
+    required this.viewport,
+    required this.cursorPos,
+    required this.theme,
+    this.paths = const [],
+    this.activePath,
+    this.ema20,
+    this.ema50,
+    this.ema200,
+    this.syncedCursorRange,
+    this.barDuration,
+    this.showVolume = false,
+    this.openPosition,
+    this.pendingOrders = const [],
+    this.closedTrades = const [],
+    this.selectedPathId,
+    this.selectedPointIndex,
+    this.highlightedRange,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Background
+    canvas.drawRect(Offset.zero & size, Paint()..color = theme.background);
+
+    final gridPaint = Paint()
+      ..color = theme.gridLine
+      ..strokeWidth = 1.0;
+
+    // Horizontal grid lines (matches PriceAxisPainter divisions)
+    const int priceRows = 6;
+    for (int r = 1; r < priceRows; r++) {
+      final y = size.height * (r / priceRows);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    // Vertical grid lines (matches TimeAxisPainter step)
+    final int step = computeTimeStep(viewport.visibleBarCount);
+    final int first = math.max(0, viewport.startIndex.floor());
+    final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
+
+    for (int i = first; i <= last; i++) {
+      if (i % step == 0) {
+        final x = viewport.indexToX(i.toDouble(), size.width);
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      }
+    }
+
+    // Volume histogram (drawn before candlesticks so candles sit on top)
+    if (showVolume && candles.isNotEmpty && viewport.visibleBarCount > 0) {
+      double maxVol = 0;
+      for (int i = first; i <= last; i++) {
+        if (candles[i].volume > maxVol) maxVol = candles[i].volume;
+      }
+      if (maxVol > 0) {
+        final double slotWidth = size.width / viewport.visibleBarCount;
+        final double barWidth = math.max(slotWidth * 0.72, 1.0);
+        for (int i = first; i <= last; i++) {
+          final c = candles[i];
+          final double h =
+              (c.volume / maxVol) * size.height * 0.18;
+          final double x = viewport.indexToX(i.toDouble(), size.width);
+          canvas.drawRect(
+            Rect.fromLTWH(
+              x - barWidth / 2,
+              size.height - h,
+              barWidth,
+              h,
+            ),
+            Paint()
+              ..color = (c.close >= c.open
+                      ? theme.bullBorder
+                      : theme.bearBody)
+                  .withValues(alpha: 0.22),
+          );
+        }
+      }
+    }
+
+    // Candles
+    if (candles.isNotEmpty && viewport.visibleBarCount > 0) {
+      final double slotWidth = size.width / viewport.visibleBarCount;
+      final double bodyWidth = math.max(slotWidth * 0.72, 1.0);
+      final double wickWidth = clampDouble(slotWidth * 0.12, 1.0, 2.2);
+
+      final Duration candleDuration =
+          barDuration ?? const Duration(minutes: 1);
+
+      for (int i = first; i <= last; i++) {
+        final c = candles[i];
+        final bool isBull = c.close >= c.open;
+        final bool matched = highlightedRange != null &&
+            c.time.isBefore(highlightedRange!.end) &&
+            c.time.add(candleDuration).isAfter(highlightedRange!.start);
+
+        final Color wickColor = matched
+            ? theme.activePillBackground
+            : (isBull ? theme.bullBorder : theme.bearBorder);
+        final wickPaint = Paint()
+          ..color = wickColor
+          ..strokeWidth = wickWidth;
+
+        final double centerX = viewport.indexToX(i.toDouble(), size.width);
+        final double yHigh = viewport.priceToY(c.high, size.height);
+        final double yLow = viewport.priceToY(c.low, size.height);
+        final double yOpen = viewport.priceToY(c.open, size.height);
+        final double yClose = viewport.priceToY(c.close, size.height);
+
+        canvas.drawLine(Offset(centerX, yHigh), Offset(centerX, yLow), wickPaint);
+
+        final double top = math.min(yOpen, yClose);
+        final double bottom = math.max(yOpen, yClose);
+        final double bodyHeight = math.max(bottom - top, 1.5);
+        final Rect bodyRect = Rect.fromLTWH(
+          centerX - bodyWidth / 2,
+          top,
+          bodyWidth,
+          bodyHeight,
+        );
+
+        if (matched) {
+          canvas.drawRect(
+            bodyRect,
+            Paint()..color = theme.activePillBackground,
+          );
+          canvas.drawRect(
+            bodyRect,
+            Paint()
+              ..color = theme.activePillBackground
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.2,
+          );
+        } else if (isBull && theme.hollowBull) {
+          // Hollow bullish candle: filled body + stroked border
+          canvas.drawRect(
+            bodyRect,
+            Paint()..color = theme.bullBody,
+          );
+          canvas.drawRect(
+            bodyRect,
+            Paint()
+              ..color = theme.bullBorder
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.2,
+          );
+        } else {
+          canvas.drawRect(
+            bodyRect,
+            Paint()..color = isBull ? theme.bullBody : theme.bearBody,
+          );
+        }
+      }
+    }
+
+    // EMA overlays
+    if (ema20 != null) {
+      _drawEma(canvas, size, ema20!, const Color(0xFF1B4F72));
+    }
+    if (ema50 != null) {
+      _drawEma(canvas, size, ema50!, const Color(0xFFB75500));
+    }
+    if (ema200 != null) {
+      _drawEma(canvas, size, ema200!, const Color(0xFF8E24AA));
+    }
+
+    // Order / position / SL lines and trade markers
+    _drawOrdersAndTrades(canvas, size);
+
+    // Cross-timeframe paths
+    for (final path in paths) {
+      _drawPath(
+        canvas,
+        size,
+        path,
+        selected: path.id == selectedPathId,
+        selectedIndex: path.id == selectedPathId ? selectedPointIndex : null,
+      );
+    }
+    if (activePath != null) {
+      _drawPath(canvas, size, activePath!);
+
+      // Dashed preview line from last point to cursor
+      if (cursorPos != null && activePath!.points.isNotEmpty) {
+        final last = activePath!.points.last;
+        final lastX = viewport.indexToX(
+          resolveBarIndex(last.time, candles, barDuration: barDuration),
+          size.width,
+        );
+        final lastY = viewport.priceToY(last.price, size.height);
+        _drawDashedLine(
+          canvas,
+          Offset(lastX, lastY),
+          cursorPos!,
+          Paint()
+            ..color = theme.pathColor.withValues(alpha: 0.7)
+            ..strokeWidth = 2.0,
+        );
+      }
+    }
+
+    // Synced crosshair from other panes (subtle time guide)
+    if (cursorPos == null && syncedCursorRange != null) {
+      final double idx = resolveBarIndex(
+        syncedCursorRange!.start,
+        candles,
+        barDuration: barDuration,
+      );
+      final double x = viewport.indexToX(idx, size.width);
+      if (x >= 0 && x <= size.width) {
+        _drawDashedLine(
+          canvas,
+          Offset(x, 0),
+          Offset(x, size.height),
+          Paint()
+            ..color = theme.crosshair.withValues(alpha: 0.35)
+            ..strokeWidth = 1.0,
+        );
+      }
+    }
+
+    // Crosshair lines only (badges live inside the dedicated axes!)
+    if (cursorPos != null) {
+      final double rawIndex = viewport.xToIndex(cursorPos!.dx, size.width);
+      final double snappedX = viewport.indexToX(
+        rawIndex.round().toDouble(),
+        size.width,
+      );
+      final double cursorY = cursorPos!.dy;
+
+      final linePaint = Paint()
+        ..color = theme.crosshair.withValues(alpha: 0.7)
+        ..strokeWidth = 1.0;
+
+      _drawDashedLine(
+        canvas,
+        Offset(snappedX, 0),
+        Offset(snappedX, size.height),
+        linePaint,
+      );
+      _drawDashedLine(
+        canvas,
+        Offset(0, cursorY),
+        Offset(size.width, cursorY),
+        linePaint,
+      );
+    }
+  }
+
+  void _drawOrdersAndTrades(Canvas canvas, Size size) {
+    final OpenPosition? pos = openPosition;
+    if (pos != null) {
+      final Color posBg = pos.side == OrderSide.buy
+          ? theme.pendingBuyBackground
+          : theme.pendingSellBackground;
+      final Color posText = pos.side == OrderSide.buy
+          ? theme.pendingBuyText
+          : theme.pendingSellText;
+      final double y = viewport.priceToY(pos.entryPrice, size.height);
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(size.width, y),
+        Paint()
+          ..color = posBg
+          ..strokeWidth = 1.5,
+      );
+      _drawRightBadge(
+        canvas,
+        size,
+        y,
+        '${pos.side == OrderSide.buy ? "LONG" : "SHORT"} ${pos.entryPrice.toStringAsFixed(2)} │ ✕',
+        posBg,
+        fill: posBg,
+        textColor: posText,
+      );
+    }
+
+    final double? sl = pos?.currentSl;
+    if (pos != null && sl != null) {
+      final bool slIsProfit =
+          pos.side == OrderSide.buy ? sl >= pos.entryPrice : sl <= pos.entryPrice;
+      final Color slBg = slIsProfit
+          ? theme.pendingBuyBackground
+          : theme.pendingSellBackground;
+      final Color slText = slIsProfit
+          ? theme.pendingBuyText
+          : theme.pendingSellText;
+      final double y = viewport.priceToY(sl, size.height);
+      _drawDashedLine(
+        canvas,
+        Offset(0, y),
+        Offset(size.width, y),
+        Paint()
+          ..color = slBg
+          ..strokeWidth = 1.5,
+      );
+      _drawRightBadge(
+        canvas,
+        size,
+        y,
+        'SL ${sl.toStringAsFixed(2)} │ ✕',
+        slBg,
+        fill: slBg,
+        textColor: slText,
+      );
+    }
+
+    for (final order in pendingOrders) {
+      final Color lineAndBg = order.side == OrderSide.buy
+          ? theme.pendingBuyBackground
+          : theme.pendingSellBackground;
+      final Color orderTextColor = order.side == OrderSide.buy
+          ? theme.pendingBuyText
+          : theme.pendingSellText;
+      final double y = viewport.priceToY(order.entryPrice, size.height);
+      _drawDashedLine(
+        canvas,
+        Offset(0, y),
+        Offset(size.width, y),
+        Paint()
+          ..color = lineAndBg
+          ..strokeWidth = 1.2,
+      );
+      _drawRightBadge(
+        canvas,
+        size,
+        y,
+        '${order.side.name.toUpperCase()} ${order.type.name.toUpperCase()} ${order.entryPrice.toStringAsFixed(2)} │ ✕',
+        lineAndBg,
+        fill: lineAndBg,
+        textColor: orderTextColor,
+      );
+    }
+
+    // Entry marker for the live position.
+    if (pos != null) {
+      _drawEntryMarker(canvas, size, pos.side, pos.entryTime, pos.entryPrice);
+    }
+
+    // Entry + exit markers for closed trades, connected by a dotted line.
+    for (final trade in closedTrades) {
+      _drawEntryMarker(
+        canvas,
+        size,
+        trade.side,
+        trade.entryTime,
+        trade.entryPrice,
+      );
+      final double entryX = viewport.indexToX(
+        resolveBarIndex(trade.entryTime, candles, barDuration: barDuration),
+        size.width,
+      );
+      final double entryY = viewport.priceToY(trade.entryPrice, size.height);
+      final double exitX = viewport.indexToX(
+        resolveBarIndex(trade.exitTime, candles, barDuration: barDuration),
+        size.width,
+      );
+      final double exitY = viewport.priceToY(trade.exitPrice, size.height);
+
+      _drawDottedLine(
+        canvas,
+        Offset(entryX, entryY),
+        Offset(exitX, exitY),
+        Paint()
+          ..color = theme.textSecondary.withValues(alpha: 0.5)
+          ..strokeWidth = 1.0,
+      );
+
+      final Color exitColor =
+          trade.pnlPoints >= 0 ? theme.bullBorder : theme.bearBody;
+      final Paint exitPaint = Paint()..color = exitColor;
+      const double r = 3.5;
+      canvas.drawLine(
+        Offset(exitX - r, exitY - r),
+        Offset(exitX + r, exitY + r),
+        exitPaint
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke,
+      );
+      canvas.drawLine(
+        Offset(exitX - r, exitY + r),
+        Offset(exitX + r, exitY - r),
+        exitPaint,
+      );
+    }
+  }
+
+  void _drawEntryMarker(
+    Canvas canvas,
+    Size size,
+    OrderSide side,
+    DateTime time,
+    double price,
+  ) {
+    final double x = viewport.indexToX(
+      resolveBarIndex(time, candles, barDuration: barDuration),
+      size.width,
+    );
+    final double y = viewport.priceToY(price, size.height);
+    const double h = 6.0;
+    const double w = 4.0;
+    final bool buy = side == OrderSide.buy;
+    final double tipY = buy ? y + 12.0 : y - 12.0;
+    final double baseY = buy ? tipY - h : tipY + h;
+    final Path path = Path()
+      ..moveTo(x, tipY)
+      ..lineTo(x - w, baseY)
+      ..lineTo(x + w, baseY)
+      ..close();
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = side == OrderSide.buy
+            ? theme.pendingBuyBackground
+            : theme.pendingSellBackground,
+    );
+  }
+
+  void _drawRightBadge(
+    Canvas canvas,
+    Size size,
+    double y,
+    String text,
+    Color accent, {
+    Color? fill,
+    Color? textColor,
+  }) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: textColor ?? theme.badgeText,
+          fontSize: 10,
+          fontFamily: theme.fontFamily,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final double bx = size.width - tp.width - 8;
+    final double by = y - tp.height / 2;
+    canvas.drawRect(
+      Rect.fromLTWH(bx - 3, by - 1, tp.width + 6, tp.height + 2),
+      Paint()..color = fill ?? theme.badgeBackground,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(bx - 3, by - 1, tp.width + 6, tp.height + 2),
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
+    tp.paint(canvas, Offset(bx, by));
+  }
+
+  void _drawDottedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+    const double dot = 2.0;
+    const double gap = 4.0;
+    final double totalDist = (p2 - p1).distance;
+    if (totalDist == 0) return;
+    final Offset dir = (p2 - p1) / totalDist;
+    double current = 0;
+    while (current < totalDist) {
+      canvas.drawLine(
+        p1 + dir * current,
+        p1 + dir * math.min(current + dot, totalDist),
+        paint,
+      );
+      current += dot + gap;
+    }
+  }
+
+  void _drawEma(Canvas canvas, Size size, List<double?> series, Color color) {
+    if (series.isEmpty) return;
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3;
+
+    bool started = false;
+    for (int i = 0; i < series.length; i++) {
+      final v = series[i];
+      if (v == null) {
+        started = false;
+        continue;
+      }
+      final double x = viewport.indexToX(i.toDouble(), size.width);
+      final double y = viewport.priceToY(v, size.height);
+      if (!started) {
+        started = true;
+      } else if (i > 0 && series[i - 1] != null) {
+        final double px = viewport.indexToX((i - 1).toDouble(), size.width);
+        final double py = viewport.priceToY(series[i - 1]!, size.height);
+        canvas.drawLine(Offset(px, py), Offset(x, y), paint);
+      }
+    }
+  }
+
+  void _drawPath(
+    Canvas canvas,
+    Size size,
+    CrossTimeframePath path, {
+    bool selected = false,
+    int? selectedIndex,
+  }) {
+    if (path.points.isEmpty) return;
+
+    final linePaint = Paint()
+      ..color = theme.pathColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    final dotPaint = Paint()..color = theme.pathColor;
+
+    final List<Offset> projected = path.points.map((a) {
+      final x = viewport.indexToX(
+        resolveBarIndex(a.time, candles, barDuration: barDuration),
+        size.width,
+      );
+      return Offset(x, viewport.priceToY(a.price, size.height));
+    }).toList();
+
+    if (selected) {
+      final haloPaint = Paint()
+        ..color = theme.pathColor.withValues(alpha: 0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 5.0;
+      for (int i = 0; i < projected.length - 1; i++) {
+        canvas.drawLine(projected[i], projected[i + 1], haloPaint);
+      }
+    }
+
+    for (int i = 0; i < projected.length - 1; i++) {
+      canvas.drawLine(projected[i], projected[i + 1], linePaint);
+    }
+    for (int i = 0; i < projected.length; i++) {
+      canvas.drawCircle(projected[i], selected ? 4.5 : 3.5, dotPaint);
+      if (selected && selectedIndex == i) {
+        canvas.drawCircle(
+          projected[i],
+          7.0,
+          Paint()
+            ..color = theme.pathColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5,
+        );
+      }
+    }
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+    const double dash = 4.0;
+    const double gap = 4.0;
+    final double totalDist = (p2 - p1).distance;
+    if (totalDist == 0) return;
+    final Offset dir = (p2 - p1) / totalDist;
+    double current = 0;
+    while (current < totalDist) {
+      canvas.drawLine(
+        p1 + dir * current,
+        p1 + dir * math.min(current + dash, totalDist),
+        paint,
+      );
+      current += dash + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant MainChartPainter oldDelegate) => true;
+}
+
+// ============================================================================
+// PAINTER B: DEDICATED RIGHT PRICE AXIS
+// ============================================================================
+class PriceAxisPainter extends CustomPainter {
+  final ChartViewport viewport;
+  final Offset? cursorPos;
+  final bool isActive;
+  final ChartTheme theme;
+
+  PriceAxisPainter({
+    required this.viewport,
+    required this.cursorPos,
+    required this.isActive,
+    required this.theme,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Background + left separator border
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = isActive ? theme.axisActiveBackground : theme.axisBackground,
+    );
+    canvas.drawLine(
+      Offset.zero,
+      Offset(0, size.height),
+      Paint()
+        ..color = theme.border
+        ..strokeWidth = 1.0,
+    );
+
+    const int priceRows = 6;
+    for (int r = 1; r < priceRows; r++) {
+      final y = size.height * (r / priceRows);
+      final price = viewport.yToPrice(y, size.height);
+
+      // Small tick mark on axis border
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(4, y),
+        Paint()..color = theme.textSecondary,
+      );
+
+      _drawCenteredText(
+        canvas,
+        price.toStringAsFixed(2),
+        Offset(8, y - 6),
+        theme.textSecondary,
+      );
+    }
+
+    // Active crosshair price badge
+    if (cursorPos != null &&
+        cursorPos!.dy >= 0 &&
+        cursorPos!.dy <= size.height) {
+      final double y = cursorPos!.dy;
+      final double hoveredPrice = viewport.yToPrice(y, size.height);
+
+      final badgeRect = Rect.fromLTWH(1, y - 10, size.width - 2, 20);
+      canvas.drawRect(badgeRect, Paint()..color = theme.badgeBackground);
+      _drawCenteredText(
+        canvas,
+        hoveredPrice.toStringAsFixed(2),
+        Offset(8, y - 6),
+        theme.badgeText,
+      );
+    }
+  }
+
+  void _drawCenteredText(
+    Canvas canvas,
+    String text,
+    Offset offset,
+    Color color,
+  ) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontFamily: theme.fontFamily,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, offset);
+  }
+
+  @override
+  bool shouldRepaint(covariant PriceAxisPainter oldDelegate) => true;
+}
+
+// ============================================================================
+// PAINTER C: DEDICATED BOTTOM TIME AXIS
+// ============================================================================
+class TimeAxisPainter extends CustomPainter {
+  final List<Candle> candles;
+  final ChartViewport viewport;
+  final Offset? cursorPos;
+  final bool isActive;
+  final ChartTheme theme;
+
+  TimeAxisPainter({
+    required this.candles,
+    required this.viewport,
+    required this.cursorPos,
+    required this.isActive,
+    required this.theme,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Background + top separator border
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = isActive ? theme.axisActiveBackground : theme.axisBackground,
+    );
+    canvas.drawLine(
+      Offset.zero,
+      Offset(size.width, 0),
+      Paint()
+        ..color = theme.border
+        ..strokeWidth = 1.0,
+    );
+
+    if (candles.isEmpty) return;
+
+    final int step = computeTimeStep(viewport.visibleBarCount);
+    final int first = math.max(0, viewport.startIndex.floor());
+    final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
+
+    for (int i = first; i <= last; i++) {
+      if (i % step == 0) {
+        final double x = viewport.indexToX(i.toDouble(), size.width);
+        final String label = _formatTime(candles[i].time);
+
+        // Tick mark
+        canvas.drawLine(
+          Offset(x, 0),
+          Offset(x, 4),
+          Paint()..color = theme.textSecondary,
+        );
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: theme.textSecondary,
+              fontSize: 11,
+              fontFamily: theme.fontFamily,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+
+        tp.paint(canvas, Offset(x - tp.width / 2, 7));
+      }
+    }
+
+    // Active crosshair timestamp badge
+    if (cursorPos != null &&
+        cursorPos!.dx >= 0 &&
+        cursorPos!.dx <= size.width) {
+      final int snappedIdx = viewport.xToIndex(cursorPos!.dx, size.width).round();
+      if (snappedIdx >= 0 && snappedIdx < candles.length) {
+        final double snappedX = viewport.indexToX(
+          snappedIdx.toDouble(),
+          size.width,
+        );
+        final String label = _formatTime(candles[snappedIdx].time);
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: theme.badgeText,
+              fontSize: 11,
+              fontFamily: theme.fontFamily,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+
+        final double badgeW = tp.width + 12;
+        final double badgeX = clampDouble(
+          snappedX - badgeW / 2,
+          0,
+          size.width - badgeW,
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(badgeX, 1, badgeW, size.height - 2),
+          Paint()..color = theme.badgeBackground,
+        );
+        tp.paint(canvas, Offset(badgeX + 6, 7));
+      }
+    }
+  }
+
+  String _formatTime(DateTime dt) {
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  @override
+  bool shouldRepaint(covariant TimeAxisPainter oldDelegate) => true;
+}
