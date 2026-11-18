@@ -1,15 +1,20 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'core/theme/chart_theme.dart';
+import 'domain/data/binary_candle_store.dart';
+import 'domain/data/dataset_metadata.dart';
 import 'domain/engine/replay_engine.dart';
 import 'domain/engine/telemetry_calculator.dart';
 import 'domain/models/candle.dart';
 import 'domain/models/drawing.dart';
 import 'domain/models/order.dart';
 import 'domain/models/timeframe.dart';
+import 'features/workstation/data/datasets_page.dart';
 import 'features/workstation/stats/stats_page.dart';
 import 'features/workstation/tiling/tiling_node.dart';
 import 'features/workstation/tiling/tiling_tree_view.dart';
@@ -35,8 +40,11 @@ class _ChartScreenState extends State<ChartScreen> {
 
   static const ChartTheme _theme = ChartTheme.nytNewsprint;
 
-  late final List<Candle> _base1mCandles;
-  late final ReplayEngine _replayEngine;
+  late List<Candle> _base1mCandles;
+  late ReplayEngine _replayEngine;
+
+  BinaryCandleStore? _candleStore;
+  DatasetMetadata? _activeDataset;
 
   Timeframe _replayCadence = Timeframe.m15;
   OrderSide? _pendingPlacementSide;
@@ -73,6 +81,8 @@ class _ChartScreenState extends State<ChartScreen> {
       initialCursorIndex: 25000,
       maxCursorIndex: 29999,
     );
+
+    _initDatasetStore();
 
     _rootNode = SplitNode(
       id: 'root-split',
@@ -293,6 +303,55 @@ class _ChartScreenState extends State<ChartScreen> {
     );
   }
 
+  // --------------------------------------------------------------------------
+  // DATASET LIBRARY
+  // --------------------------------------------------------------------------
+  Future<void> _initDatasetStore() async {
+    try {
+      final Directory support = await getApplicationSupportDirectory();
+      final Directory dir = Directory(
+        '${support.path}${Platform.pathSeparator}datasets',
+      );
+      if (!mounted) return;
+      setState(() => _candleStore = BinaryCandleStore(dir));
+    } catch (_) {
+      // Keep the synthetic fallback if the platform dir is unavailable.
+    }
+  }
+
+  String get _datasetLabel =>
+      '${_activeDataset?.name ?? 'Synthetic 30k'} · ${_base1mCandles.length}';
+
+  Future<void> _loadDataset(DatasetMetadata meta) async {
+    final BinaryCandleStore? store = _candleStore;
+    if (store == null) return;
+    final int start = max(0, meta.barCount - 30000);
+    final int count = min(30000, meta.barCount - start);
+    final List<Candle> candles =
+        store.readRange(meta.sha256, startIndex: start, count: count);
+    if (!mounted) return;
+
+    setState(() {
+      _base1mCandles = List<Candle>.of(candles);
+      final int n = _base1mCandles.length;
+      final int cursor = n <= 1
+          ? 0
+          : (n * 0.8).round().clamp(1, n - 1);
+      _replayEngine = ReplayEngine(
+        base1mCandles: _base1mCandles,
+        initialCursorIndex: cursor,
+        maxCursorIndex: n - 1,
+      );
+      _activeDataset = meta;
+      _paths.clear();
+      _activePath = null;
+      _selectedPathId = null;
+      _selectedPointIndex = null;
+      _pendingPlacementSide = null;
+      _syncedCursorRange = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = _theme;
@@ -353,6 +412,16 @@ class _ChartScreenState extends State<ChartScreen> {
                 index: _selectedPageIndex,
                 children: [
                   workstation,
+                  DatasetsPage(
+                    store: _candleStore ??
+                        BinaryCandleStore(Directory.systemTemp),
+                    theme: t,
+                    activeSha256: _activeDataset?.sha256,
+                    onLoad: (meta) {
+                      _loadDataset(meta);
+                      setState(() => _selectedPageIndex = 0);
+                    },
+                  ),
                   StatsPage(
                     replayEngine: _replayEngine,
                     theme: t,
@@ -382,21 +451,29 @@ class _ChartScreenState extends State<ChartScreen> {
       child: Column(
         children: [
           const SizedBox(height: 6),
-          _NavRailItem(
-            label: 'Practice',
-            icon: Icons.candlestick_chart,
-            theme: t,
-            active: _selectedPageIndex == 0,
-            onTap: () => setState(() => _selectedPageIndex = 0),
-          ),
-          const SizedBox(height: 4),
-          _NavRailItem(
-            label: 'Stats',
-            icon: Icons.insert_chart_outlined,
-            theme: t,
-            active: _selectedPageIndex == 1,
-            onTap: () => setState(() => _selectedPageIndex = 1),
-          ),
+            _NavRailItem(
+              label: 'Practice',
+              icon: Icons.candlestick_chart,
+              theme: t,
+              active: _selectedPageIndex == 0,
+              onTap: () => setState(() => _selectedPageIndex = 0),
+            ),
+            const SizedBox(height: 4),
+            _NavRailItem(
+              label: 'Datasets',
+              icon: Icons.storage_outlined,
+              theme: t,
+              active: _selectedPageIndex == 1,
+              onTap: () => setState(() => _selectedPageIndex = 1),
+            ),
+            const SizedBox(height: 4),
+            _NavRailItem(
+              label: 'Stats',
+              icon: Icons.insert_chart_outlined,
+              theme: t,
+              active: _selectedPageIndex == 2,
+              onTap: () => setState(() => _selectedPageIndex = 2),
+            ),
         ],
       ),
     );
@@ -451,6 +528,12 @@ class _ChartScreenState extends State<ChartScreen> {
               fontSize: 12,
               letterSpacing: 0.8,
             ),
+          ),
+          const SizedBox(width: 12),
+          _toolbarButton(
+            label: _datasetLabel,
+            onTap: () => setState(() => _selectedPageIndex = 1),
+            tooltip: 'Dataset Library — import & load CSV datasets',
           ),
           const SizedBox(width: 20),
           Expanded(
