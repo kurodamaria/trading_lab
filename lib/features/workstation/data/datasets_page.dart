@@ -1,24 +1,28 @@
+import 'dart:math' as math;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/data/binary_candle_store.dart';
 import '../../../domain/data/dataset_metadata.dart';
+import '../../../domain/models/candle.dart';
+import '../../../domain/models/drawing.dart';
+import '../../../domain/models/timeframe.dart';
+import '../tiling/tiling_node.dart';
+import '../tiling/tiling_tree_view.dart';
 
 /// Full-screen dataset library page: import CSVs, browse cached `.bin`
-/// datasets, and load or delete them with protected-deletion confirmation.
+/// datasets, inspect them in a read-only multi-timeframe view, and delete
+/// them with protected-deletion confirmation.
 class DatasetsPage extends StatefulWidget {
   final BinaryCandleStore store;
   final ChartTheme theme;
-  final String? activeSha256;
-  final void Function(DatasetMetadata meta) onLoad;
 
   const DatasetsPage({
     super.key,
     required this.store,
     required this.theme,
-    required this.activeSha256,
-    required this.onLoad,
   });
 
   @override
@@ -26,9 +30,19 @@ class DatasetsPage extends StatefulWidget {
 }
 
 class _DatasetsPageState extends State<DatasetsPage> {
+  static const int windowSize = 15000;
+
   List<DatasetMetadata> _datasets = const <DatasetMetadata>[];
   bool _importing = false;
   String? _error;
+
+  // Read-only inspection state.
+  DatasetMetadata? _inspecting;
+  List<Candle> _inspectCandles = const <Candle>[];
+  int _windowStart = 0;
+  late TilingNode _inspectRoot;
+  DateTimeRange? _inspectCursorRange;
+  final List<ChartAnchor> _inspectPathAnchors = <ChartAnchor>[];
 
   @override
   void initState() {
@@ -121,6 +135,9 @@ class _DatasetsPageState extends State<DatasetsPage> {
   @override
   Widget build(BuildContext context) {
     final ChartTheme t = widget.theme;
+    if (_inspecting != null) {
+      return _inspectView(t);
+    }
     final int totalMb =
         _datasets.fold<int>(0, (sum, m) => sum + m.binSizeBytes) ~/ (1024 * 1024);
 
@@ -297,7 +314,6 @@ class _DatasetsPageState extends State<DatasetsPage> {
   }
 
   Widget _row(ChartTheme t, DatasetMetadata m) {
-    final bool isActive = m.sha256 == widget.activeSha256;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -322,7 +338,6 @@ class _DatasetsPageState extends State<DatasetsPage> {
                 ),
               ),
               const SizedBox(width: 6),
-              if (isActive) _activePill(t),
             ],
           ),
           _cell(t, m.sha256.substring(0, 12), 120),
@@ -361,8 +376,8 @@ class _DatasetsPageState extends State<DatasetsPage> {
           const Spacer(),
           _ActionPill(
             theme: t,
-            label: 'Load',
-            onTap: () => widget.onLoad(m),
+            label: 'Inspect',
+            onTap: () => _openInspect(m),
           ),
           const SizedBox(width: 6),
           _ActionPill(
@@ -376,21 +391,145 @@ class _DatasetsPageState extends State<DatasetsPage> {
     );
   }
 
-  Widget _activePill(ChartTheme t) {
+  // ---------------------------------------------------------------------------
+  // Read-only inspection
+  // ---------------------------------------------------------------------------
+  void _openInspect(DatasetMetadata m) {
+    final int start = math.max(0, m.barCount - windowSize);
+    final int count = math.min(windowSize, m.barCount - start);
+    final List<Candle> candles =
+        widget.store.readRange(m.sha256, startIndex: start, count: count);
+    setState(() {
+      _inspecting = m;
+      _windowStart = start;
+      _inspectCandles = candles;
+      _inspectCursorRange = null;
+      _inspectRoot = SplitNode(
+        id: 'inspect-root',
+        direction: Axis.horizontal,
+        ratio: 0.5,
+        first: const PaneNode(id: 'inspect-left', timeframe: Timeframe.m15),
+        second: const PaneNode(id: 'inspect-right', timeframe: Timeframe.h1),
+      );
+      _inspectPathAnchors.clear();
+    });
+  }
+
+  void _shiftInspectWindow(int delta) {
+    final DatasetMetadata? m = _inspecting;
+    if (m == null) return;
+    final int maxStart = math.max(0, m.barCount - windowSize);
+    final int newStart = (_windowStart + delta).clamp(0, maxStart);
+    final int count = math.min(windowSize, m.barCount - newStart);
+    final List<Candle> candles =
+        widget.store.readRange(m.sha256, startIndex: newStart, count: count);
+    setState(() {
+      _windowStart = newStart;
+      _inspectCandles = candles;
+      _inspectCursorRange = null;
+    });
+  }
+
+  void _closeInspect() {
+    setState(() {
+      _inspecting = null;
+      _inspectCandles = const <Candle>[];
+      _inspectCursorRange = null;
+      _inspectPathAnchors.clear();
+    });
+  }
+
+  Widget _inspectView(ChartTheme t) {
+    final DatasetMetadata meta = _inspecting!;
+    final int maxStart = math.max(0, meta.barCount - windowSize);
+    final bool canPrev = _windowStart > 0;
+    final bool canNext = _windowStart < maxStart;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: t.activePillBackground,
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Text(
-        'ACTIVE',
-        style: TextStyle(
-          color: t.activePillText,
-          fontFamily: t.fontFamily,
-          fontSize: 9,
-          fontWeight: FontWeight.bold,
-        ),
+      color: t.background,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: t.axisBackground,
+              border: Border(bottom: BorderSide(color: t.border, width: 1)),
+            ),
+            child: Row(
+              children: [
+                _ActionPill(
+                  theme: t,
+                  label: '← Back',
+                  secondary: true,
+                  onTap: _closeInspect,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  meta.name,
+                  style: TextStyle(
+                    color: t.textPrimary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  meta.sha256.substring(0, 12),
+                  style: TextStyle(
+                    color: t.textSecondary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Text(
+                  'Bars ${_windowStart + 1}–${_windowStart + _inspectCandles.length} of ${meta.barCount}',
+                  style: TextStyle(
+                    color: t.textSecondary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 11,
+                  ),
+                ),
+                const Spacer(),
+                _ActionPill(
+                  theme: t,
+                  label: '◀ Prev',
+                  secondary: true,
+                  onTap:
+                      canPrev ? () => _shiftInspectWindow(-windowSize) : null,
+                ),
+                const SizedBox(width: 6),
+                _ActionPill(
+                  theme: t,
+                  label: 'Next ▶',
+                  secondary: true,
+                  onTap: canNext ? () => _shiftInspectWindow(windowSize) : null,
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: TilingTreeView(
+              node: _inspectRoot,
+              base1mCandles: _inspectCandles,
+              theme: t,
+              isDrawingPath: false,
+              paths: const <CrossTimeframePath>[],
+              activePath: null,
+              syncedCursorRange: _inspectCursorRange,
+              canClose: _inspectRoot is SplitNode,
+              onTreeChanged: (n) => setState(() => _inspectRoot = n),
+              onHoverRangeChanged: (r) =>
+                  setState(() => _inspectCursorRange = r),
+              onAddPathPoint: (a) =>
+                  setState(() => _inspectPathAnchors.add(a)),
+              onFinishPath: () => setState(() => _inspectPathAnchors.clear()),
+            ),
+          ),
+        ],
       ),
     );
   }
