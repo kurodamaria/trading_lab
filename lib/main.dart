@@ -51,7 +51,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   final FocusNode _keyboardFocusNode = FocusNode();
 
-  int _selectedPageIndex = 0;
+  int _selectedPageIndex = 1;
 
   @override
   void dispose() {
@@ -411,7 +411,6 @@ class _ChartScreenState extends State<ChartScreen> {
               child: IndexedStack(
                 index: _selectedPageIndex,
                 children: [
-                  workstation,
                   DatasetsPage(
                     store: _candleStore ??
                         BinaryCandleStore(Directory.systemTemp),
@@ -419,9 +418,10 @@ class _ChartScreenState extends State<ChartScreen> {
                     activeSha256: _activeDataset?.sha256,
                     onLoad: (meta) {
                       _loadDataset(meta);
-                      setState(() => _selectedPageIndex = 0);
+                      setState(() => _selectedPageIndex = 1);
                     },
                   ),
+                  workstation,
                   StatsPage(
                     replayEngine: _replayEngine,
                     theme: t,
@@ -452,16 +452,16 @@ class _ChartScreenState extends State<ChartScreen> {
         children: [
           const SizedBox(height: 6),
             _NavRailItem(
-              label: 'Practice',
-              icon: Icons.candlestick_chart,
+              label: 'Datasets',
+              icon: Icons.storage_outlined,
               theme: t,
               active: _selectedPageIndex == 0,
               onTap: () => setState(() => _selectedPageIndex = 0),
             ),
             const SizedBox(height: 4),
             _NavRailItem(
-              label: 'Datasets',
-              icon: Icons.storage_outlined,
+              label: 'Practice',
+              icon: Icons.candlestick_chart,
               theme: t,
               active: _selectedPageIndex == 1,
               onTap: () => setState(() => _selectedPageIndex = 1),
@@ -481,7 +481,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _onKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
-    if (_selectedPageIndex != 0) return;
+    if (_selectedPageIndex != 1) return;
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       _stepForward();
     } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
@@ -532,7 +532,7 @@ class _ChartScreenState extends State<ChartScreen> {
           const SizedBox(width: 12),
           _toolbarButton(
             label: _datasetLabel,
-            onTap: () => setState(() => _selectedPageIndex = 1),
+            onTap: () => setState(() => _selectedPageIndex = 0),
             tooltip: 'Dataset Library — import & load CSV datasets',
           ),
           const SizedBox(width: 20),
