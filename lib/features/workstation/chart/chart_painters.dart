@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/models/candle.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
 import '../../../domain/models/order.dart';
 import 'chart_viewport.dart';
@@ -42,8 +43,9 @@ String _dayLabel(DateTime t) => '${_monthAbbr[t.month - 1]} ${t.day}';
 List<_TimeTick> _computeTimeTicks(
   List<Candle> candles,
   ChartViewport viewport,
-  double width,
-) {
+  double width, [
+  DisplayTimezone tz = DisplayTimezone.utc,
+]) {
   if (candles.isEmpty || width <= 0 || viewport.visibleBarCount <= 0) {
     return const <_TimeTick>[];
   }
@@ -91,7 +93,7 @@ List<_TimeTick> _computeTimeTicks(
   double lastX = -double.infinity;
 
   for (int i = first; i <= last; i++) {
-    final DateTime t = candles[i].time;
+    final DateTime t = tz.toDisplayTime(candles[i].time);
     if (prev != null && isBoundary(prev, t)) {
       final double x = viewport.indexToX(i.toDouble(), width);
       final bool inRange = x >= 0 && x <= width;
@@ -145,6 +147,7 @@ class MainChartPainter extends CustomPainter {
   final String? selectedPathId;
   final int? selectedPointIndex;
   final DateTimeRange? highlightedRange;
+  final DisplayTimezone displayTimezone;
 
   MainChartPainter({
     required this.candles,
@@ -165,6 +168,7 @@ class MainChartPainter extends CustomPainter {
     this.selectedPathId,
     this.selectedPointIndex,
     this.highlightedRange,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -184,7 +188,8 @@ class MainChartPainter extends CustomPainter {
     }
 
     // Vertical grid lines (hierarchical, collision-free)
-    final List<_TimeTick> ticks = _computeTimeTicks(candles, viewport, size.width);
+    final List<_TimeTick> ticks =
+        _computeTimeTicks(candles, viewport, size.width, displayTimezone);
     final int first = math.max(0, viewport.startIndex.floor());
     final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
     for (final _TimeTick tick in ticks) {
@@ -817,6 +822,7 @@ class TimeAxisPainter extends CustomPainter {
   final Offset? cursorPos;
   final bool isActive;
   final ChartTheme theme;
+  final DisplayTimezone displayTimezone;
 
   TimeAxisPainter({
     required this.candles,
@@ -824,6 +830,7 @@ class TimeAxisPainter extends CustomPainter {
     required this.cursorPos,
     required this.isActive,
     required this.theme,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -843,7 +850,8 @@ class TimeAxisPainter extends CustomPainter {
 
     if (candles.isEmpty) return;
 
-    final List<_TimeTick> ticks = _computeTimeTicks(candles, viewport, size.width);
+    final List<_TimeTick> ticks =
+        _computeTimeTicks(candles, viewport, size.width, displayTimezone);
     for (final _TimeTick tick in ticks) {
       final double x = tick.x;
 
@@ -880,7 +888,8 @@ class TimeAxisPainter extends CustomPainter {
           snappedIdx.toDouble(),
           size.width,
         );
-        final String label = _fullTime(candles[snappedIdx].time);
+        final String label =
+            _fullTime(displayTimezone.toDisplayTime(candles[snappedIdx].time));
 
         final tp = TextPainter(
           text: TextSpan(

@@ -10,10 +10,12 @@ import 'domain/data/binary_candle_store.dart';
 import 'domain/engine/replay_engine.dart';
 import 'domain/engine/telemetry_calculator.dart';
 import 'domain/models/candle.dart';
+import 'domain/models/display_timezone.dart';
 import 'domain/models/drawing.dart';
 import 'domain/models/order.dart';
 import 'domain/models/timeframe.dart';
 import 'features/workstation/data/datasets_page.dart';
+import 'features/workstation/settings/settings_page.dart';
 import 'features/workstation/stats/stats_page.dart';
 import 'features/workstation/tiling/tiling_node.dart';
 import 'features/workstation/tiling/tiling_tree_view.dart';
@@ -51,6 +53,8 @@ class _ChartScreenState extends State<ChartScreen> {
   final FocusNode _keyboardFocusNode = FocusNode();
 
   int _selectedPageIndex = 1;
+
+  DisplayTimezone _displayTimezone = DisplayTimezone.utcPlus8;
 
   @override
   void dispose() {
@@ -233,6 +237,14 @@ class _ChartScreenState extends State<ChartScreen> {
   // --------------------------------------------------------------------------
   // TILING OPERATIONS
   // --------------------------------------------------------------------------
+  void _cycleTimezoneQuick() {
+    setState(() {
+      _displayTimezone = _displayTimezone == DisplayTimezone.utc
+          ? DisplayTimezone.utcPlus8
+          : DisplayTimezone.utc;
+    });
+  }
+
   void _onTreeChanged(TilingNode newNode) {
     setState(() => _rootNode = newNode);
   }
@@ -378,6 +390,7 @@ class _ChartScreenState extends State<ChartScreen> {
             onFocusRequested: _keyboardFocusNode.requestFocus,
             onClosePosition: _closePosition,
             onRemoveSl: _removeStopLoss,
+            displayTimezone: _displayTimezone,
           ),
         ),
       ],
@@ -399,12 +412,19 @@ class _ChartScreenState extends State<ChartScreen> {
                     store: _candleStore ??
                         BinaryCandleStore(Directory.systemTemp),
                     theme: t,
+                    displayTimezone: _displayTimezone,
                   ),
                   workstation,
                   StatsPage(
                     replayEngine: _replayEngine,
                     theme: t,
                     onCopyCsv: _copyCsv,
+                    displayTimezone: _displayTimezone,
+                  ),
+                  SettingsPage(
+                    theme: t,
+                    selected: _displayTimezone,
+                    onChanged: (tz) => setState(() => _displayTimezone = tz),
                   ),
                 ],
               ),
@@ -453,6 +473,15 @@ class _ChartScreenState extends State<ChartScreen> {
               active: _selectedPageIndex == 2,
               onTap: () => setState(() => _selectedPageIndex = 2),
             ),
+            const Spacer(),
+            _NavRailItem(
+              label: 'Settings',
+              icon: Icons.settings_outlined,
+              theme: t,
+              active: _selectedPageIndex == 3,
+              onTap: () => setState(() => _selectedPageIndex = 3),
+            ),
+            const SizedBox(height: 6),
         ],
       ),
     );
@@ -563,6 +592,15 @@ class _ChartScreenState extends State<ChartScreen> {
                   const SizedBox(width: 8),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onSecondaryTap: _cycleTimezoneQuick,
+            child: _toolbarButton(
+              label: _displayTimezone.shortLabel,
+              onTap: () => setState(() => _selectedPageIndex = 3),
+              tooltip: 'Display Timezone (click to configure in Settings)',
             ),
           ),
         ],

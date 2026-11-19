@@ -26,3 +26,8 @@
 - Never leave empty `() {}` stubs or `// TODO` placeholders; if an interface is ambiguous, stop and ask in 1 line.
 - Run `flutter analyze` (and `dart test` when `lib/domain/` or `test/` changes) before finishing.
 - Skip narration; respond with a single line: `OK: <modified/created files>`.
+
+## Flutter & Chart State Discipline
+- **Zero Collection Allocation in `build()`:** Never pass `.toList()` or newly constructed lists/maps into child widgets inside `build()`. Cache derived lists in `State` and update them only when the underlying data changes so `identical()` checks in `didUpdateWidget` remain valid.
+- **Preserve Viewport on Parent Rebuilds:** `ChartPaneWidget.didUpdateWidget` must never overwrite `_viewport.startIndex` or `_viewport.endIndex` during hover, cursor-sync, or order-state updates. Only re-anchor the right edge on initial mount, explicit timeframe switches, or replay bar advances when already pinned to the right edge.
+- **Arena-Free Chart Pointers:** Keep chart pan, pinch-zoom, and touch long-press inside the single `Listener` pointer map in `chart_pane_widget.dart` rather than stacking competing `GestureDetector` recognizers.

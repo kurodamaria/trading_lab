@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/engine/replay_engine.dart';
 import '../../../domain/engine/telemetry_calculator.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/order.dart';
 
 /// Editorial Newsprint-styled telemetry dashboard for a replay session.
@@ -12,12 +13,14 @@ class StatsPage extends StatelessWidget {
   final ReplayEngine replayEngine;
   final ChartTheme theme;
   final VoidCallback onCopyCsv;
+  final DisplayTimezone displayTimezone;
 
   const StatsPage({
     super.key,
     required this.replayEngine,
     required this.theme,
     required this.onCopyCsv,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -183,6 +186,7 @@ class StatsPage extends StatelessWidget {
         children: [
           _cell(t, '#', 40, bold: true),
           _cell(t, 'SIDE', 70, bold: true),
+          _cell(t, 'TIME', 120, bold: true),
           _cell(t, 'ENTRY', 100, bold: true),
           _cell(t, 'EXIT', 100, bold: true),
           _cell(t, 'PnL', 90, bold: true),
@@ -207,6 +211,7 @@ class StatsPage extends StatelessWidget {
         children: [
           _cell(t, '$index', 40),
           _cell(t, isLong ? 'LONG' : 'SHORT', 70, color: sideColor, bold: true),
+          _cell(t, _fmtTime(trade.entryTime), 120),
           _cell(t, trade.entryPrice.toStringAsFixed(2), 100),
           _cell(t, trade.exitPrice.toStringAsFixed(2), 100),
           _cell(
@@ -227,14 +232,20 @@ class StatsPage extends StatelessWidget {
     );
   }
 
+  String _fmtTime(DateTime utcTime) {
+    final DateTime d = displayTimezone.toDisplayTime(utcTime);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} '
+        '${two(d.hour)}:${two(d.minute)}';
+  }
+
   Widget _cell(
     ChartTheme t,
     String text,
     double width, {
     Color? color,
     bool bold = false,
-  }) {
-    return SizedBox(
+  }) {    return SizedBox(
       width: width,
       child: Text(
         text,

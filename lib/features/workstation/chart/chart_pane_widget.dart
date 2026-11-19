@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/engine/bar_aggregator.dart';
 import '../../../domain/models/candle.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
 import '../../../domain/models/order.dart';
 import '../../../domain/models/timeframe.dart';
@@ -46,6 +47,7 @@ class ChartPaneWidget extends StatefulWidget {
   final VoidCallback? onFocusRequested;
   final VoidCallback? onClosePosition;
   final VoidCallback? onRemoveSl;
+  final DisplayTimezone displayTimezone;
 
   const ChartPaneWidget({
     super.key,
@@ -78,6 +80,7 @@ class ChartPaneWidget extends StatefulWidget {
     this.onFocusRequested,
     this.onClosePosition,
     this.onRemoveSl,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -843,6 +846,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                                         .duration),
                                                   )
                                                 : widget.syncedCursorRange,
+                                            displayTimezone:
+                                                widget.displayTimezone,
                                           ),
                                         ),
                                         if (hovered != null)
@@ -940,6 +945,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                       cursorPos: _cursorPos,
                                       isActive: _isDraggingTimeAxis,
                                       theme: t,
+                                      displayTimezone: widget.displayTimezone,
                                     ),
                                   ),
                                 ),

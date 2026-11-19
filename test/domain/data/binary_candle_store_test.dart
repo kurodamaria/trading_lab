@@ -36,8 +36,8 @@ void main() {
     expect(res.deduplicated, isFalse);
     expect(res.metadata.barCount, 3);
     expect(res.metadata.binSizeBytes, BinaryCandleStore.headerBytes + 3 * 48);
-    expect(res.metadata.firstTime, DateTime(2026, 1, 1, 9, 30));
-    expect(res.metadata.lastTime, DateTime(2026, 1, 1, 9, 32));
+    expect(res.metadata.firstTime, DateTime.utc(2026, 1, 1, 9, 30));
+    expect(res.metadata.lastTime, DateTime.utc(2026, 1, 1, 9, 32));
 
     final List<Candle> candles = store.readRange(res.metadata.sha256);
     expect(candles, hasLength(3));
@@ -58,7 +58,7 @@ void main() {
     final DatasetImportResult res = await store.importCsvFile(csv.path);
     final List<Candle> candles = store.readRange(res.metadata.sha256);
     expect(candles, hasLength(2));
-    expect(candles.first.time, DateTime(2026, 1, 2, 9, 30));
+    expect(candles.first.time, DateTime.utc(2026, 1, 2, 9, 30));
     expect(candles.first.volume, 1234);
     expect(candles[1].volume, 5678);
   });
@@ -71,11 +71,11 @@ void main() {
     expect(candles, hasLength(2));
     expect(
       candles.first.time,
-      DateTime.fromMillisecondsSinceEpoch(1700000000 * 1000),
+      DateTime.fromMillisecondsSinceEpoch(1700000000 * 1000, isUtc: true),
     );
     expect(
       candles[1].time,
-      DateTime.fromMillisecondsSinceEpoch(1700000060000),
+      DateTime.fromMillisecondsSinceEpoch(1700000060000, isUtc: true),
     );
   });
 

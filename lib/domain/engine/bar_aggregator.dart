@@ -9,7 +9,6 @@ class BarAggregator {
     if (tf == Timeframe.m1) return base1mCandles;
 
     final int bucketMs = tf.duration.inMilliseconds;
-    final bool isUtc = base1mCandles.first.time.isUtc;
 
     final List<Candle> out = <Candle>[];
     int currentKey = -9223372036854775807;
@@ -23,7 +22,7 @@ class BarAggregator {
           index: out.length,
           time: DateTime.fromMillisecondsSinceEpoch(
             currentKey * bucketMs,
-            isUtc: isUtc,
+            isUtc: true,
           ),
           open: open,
           high: high,
@@ -36,7 +35,7 @@ class BarAggregator {
     }
 
     for (final c in base1mCandles) {
-      final int key = c.time.millisecondsSinceEpoch ~/ bucketMs;
+      final int key = c.time.toUtc().millisecondsSinceEpoch ~/ bucketMs;
       if (key != currentKey) {
         flush();
         currentKey = key;

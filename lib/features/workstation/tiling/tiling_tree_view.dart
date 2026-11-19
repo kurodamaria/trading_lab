@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/models/candle.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
 import '../../../domain/models/order.dart';
 import '../../../domain/models/timeframe.dart';
@@ -40,6 +41,7 @@ class TilingTreeView extends StatelessWidget {
   final VoidCallback? onFocusRequested;
   final VoidCallback? onClosePosition;
   final VoidCallback? onRemoveSl;
+  final DisplayTimezone displayTimezone;
 
   const TilingTreeView({
     super.key,
@@ -71,6 +73,7 @@ class TilingTreeView extends StatelessWidget {
     this.onFocusRequested,
     this.onClosePosition,
     this.onRemoveSl,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -110,6 +113,7 @@ class TilingTreeView extends StatelessWidget {
         onFocusRequested: onFocusRequested,
         onClosePosition: onClosePosition,
         onRemoveSl: onRemoveSl,
+        displayTimezone: displayTimezone,
       );
     }
     if (n is SplitNode) {
@@ -152,6 +156,7 @@ class TilingTreeView extends StatelessWidget {
                 onFocusRequested: onFocusRequested,
                 onClosePosition: onClosePosition,
                 onRemoveSl: onRemoveSl,
+                displayTimezone: displayTimezone,
               );
 
           final Widget divider = _Divider(

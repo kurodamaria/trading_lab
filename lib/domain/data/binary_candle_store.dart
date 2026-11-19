@@ -262,12 +262,29 @@ class BinaryCandleStore {
       return v * 1000;
     }
 
-    final DateTime? isoRaw = DateTime.tryParse(raw.replaceFirst(' ', 'T'));
+    DateTime? asUtcWall(DateTime? d) {
+      if (d == null) return null;
+      if (d.isUtc) return d;
+      return DateTime.utc(
+        d.year,
+        d.month,
+        d.day,
+        d.hour,
+        d.minute,
+        d.second,
+        d.millisecond,
+        d.microsecond,
+      );
+    }
+
+    final DateTime? isoRaw =
+        asUtcWall(DateTime.tryParse(raw.replaceFirst(' ', 'T')));
     if (isoRaw != null) return isoRaw.millisecondsSinceEpoch;
     if (raw.contains('.')) {
       final String dotNormalized =
           raw.replaceAll('.', '-').replaceFirst(' ', 'T');
-      final DateTime? dotParsed = DateTime.tryParse(dotNormalized);
+      final DateTime? dotParsed =
+          asUtcWall(DateTime.tryParse(dotNormalized));
       if (dotParsed != null) return dotParsed.millisecondsSinceEpoch;
     }
     return null;
@@ -291,8 +308,8 @@ class BinaryCandleStore {
       sha256: sha,
       name: name,
       barCount: barCount,
-      firstTime: DateTime.fromMillisecondsSinceEpoch(firstMs),
-      lastTime: DateTime.fromMillisecondsSinceEpoch(lastMs),
+      firstTime: DateTime.fromMillisecondsSinceEpoch(firstMs, isUtc: true),
+      lastTime: DateTime.fromMillisecondsSinceEpoch(lastMs, isUtc: true),
       importedAt: DateTime.now(),
       binSizeBytes: binSizeBytes,
     );
@@ -330,7 +347,7 @@ class BinaryCandleStore {
         out.add(
           Candle(
             index: start + i,
-            time: DateTime.fromMillisecondsSinceEpoch(timeMs),
+            time: DateTime.fromMillisecondsSinceEpoch(timeMs, isUtc: true),
             open: bd.getFloat64(base + 8, Endian.little),
             high: bd.getFloat64(base + 16, Endian.little),
             low: bd.getFloat64(base + 24, Endian.little),

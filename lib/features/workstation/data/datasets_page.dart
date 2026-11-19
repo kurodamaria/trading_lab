@@ -7,6 +7,7 @@ import '../../../core/theme/chart_theme.dart';
 import '../../../domain/data/binary_candle_store.dart';
 import '../../../domain/data/dataset_metadata.dart';
 import '../../../domain/models/candle.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
 import '../../../domain/models/timeframe.dart';
 import '../tiling/tiling_node.dart';
@@ -18,11 +19,13 @@ import '../tiling/tiling_tree_view.dart';
 class DatasetsPage extends StatefulWidget {
   final BinaryCandleStore store;
   final ChartTheme theme;
+  final DisplayTimezone displayTimezone;
 
   const DatasetsPage({
     super.key,
     required this.store,
     required this.theme,
+    this.displayTimezone = DisplayTimezone.utc,
   });
 
   @override
@@ -523,6 +526,15 @@ class _DatasetsPageState extends State<DatasetsPage> {
                             fontFamily: t.fontFamily,
                             fontSize: 11,
                           ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        widget.displayTimezone.shortLabel,
+                        style: TextStyle(
+                          color: t.textSecondary,
+                          fontFamily: t.fontFamily,
+                          fontSize: 11,
                         ),
                       ),
                     ],
