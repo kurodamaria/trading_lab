@@ -120,7 +120,8 @@ class SessionStore {
   }
 
   /// Deterministically arranges root trees side-by-side and nests forks
-  /// vertically below their parents without overlaps.
+  /// vertically below their parents without overlaps. Roots start at
+  /// `(48.0, 48.0)` so world coordinates keep clean margins before panning.
   List<TradingSession> autoLayout(List<TradingSession> sessions) {
     if (sessions.isEmpty) return <TradingSession>[];
 

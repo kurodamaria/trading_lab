@@ -45,6 +45,8 @@ class _SessionsPageState extends State<SessionsPage> {
 
   Offset _panOffset = Offset.zero;
   double _zoom = 1.0;
+  Size _viewportSize = Size.zero;
+  bool _didInitialFrame = false;
 
   // Arena-free pointer bookkeeping (mirrors ChartPaneWidget discipline).
   final Map<int, Offset> _pointers = <int, Offset>{};
@@ -80,6 +82,12 @@ class _SessionsPageState extends State<SessionsPage> {
       _sessions = list;
       _loading = false;
     });
+    if (!_didInitialFrame && _sessions.isNotEmpty) {
+      _didInitialFrame = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _resetView(_viewportSize);
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -347,12 +355,40 @@ class _SessionsPageState extends State<SessionsPage> {
         widget.store.autoLayout(_sessions);
     setState(() => _sessions = arranged);
     await widget.store.saveAll(arranged);
+    _resetView(_viewportSize);
   }
 
-  void _resetView() {
+  /// Resets zoom to 100% and frames all session cards inside [viewportSize].
+  void _resetView(Size viewportSize) {
     setState(() {
       _zoom = 1.0;
-      _panOffset = Offset.zero;
+      if (_sessions.isEmpty) {
+        _panOffset = Offset.zero;
+        return;
+      }
+
+      double minX = double.infinity;
+      double minY = double.infinity;
+      double maxX = -double.infinity;
+      double maxY = -double.infinity;
+      for (final TradingSession s in _sessions) {
+        minX = math.min(minX, s.canvasX);
+        minY = math.min(minY, s.canvasY);
+        maxX = math.max(maxX, s.canvasX + _cardWidth);
+        maxY = math.max(maxY, s.canvasY + _cardHeight);
+      }
+
+      // Reserve room for the bottom floating dock.
+      final double usableHeight = viewportSize.height - 72.0;
+
+      double panX = (viewportSize.width - (maxX - minX)) / 2 - minX;
+      double panY = (usableHeight - (maxY - minY)) / 2 - minY;
+
+      // Keep the top-left root card at least 36px from the top/left edges.
+      panX = math.max(panX, 36.0 - minX);
+      panY = math.max(panY, 36.0 - minY);
+
+      _panOffset = Offset(panX, panY);
     });
   }
 
@@ -364,76 +400,91 @@ class _SessionsPageState extends State<SessionsPage> {
   Widget build(BuildContext context) {
     final ChartTheme t = widget.theme;
 
-    return ClipRect(
-      child: Container(
-        color: t.background,
-        child: Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerUp,
-          onPointerCancel: _onPointerUp,
-          onPointerSignal: _onPointerSignal,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.grab,
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                Positioned.fill(
-                  child: RepaintBoundary(
-                    child: CustomPaint(
-                      painter: _SessionCanvasPainter(
-                        sessions: _sessions,
-                        panOffset: _panOffset,
-                        zoom: _zoom,
-                        theme: t,
-                        activeSessionId: widget.activeSessionId,
-                        draggingId: _draggingId,
-                      ),
-                    ),
-                  ),
-                ),
-                // World-space layer: cards are always laid out at their fixed
-                // 248x148 size and the whole layer is pan/zoom transformed, so
-                // card-internal layout never scales with `_zoom`. The oversized
-                // `OverflowBox` canvas means distant cards stay renderable while
-                // the page-level `ClipRect` / `Clip.hardEdge` Stack still clip
-                // everything to the canvas viewport (never over the nav rail).
-                Positioned.fill(
-                  child: Transform(
-                    transform: Matrix4.identity()
-                      ..translateByDouble(
-                        _panOffset.dx,
-                        _panOffset.dy,
-                        0.0,
-                        1.0,
-                      )
-                      ..scaleByDouble(_zoom, _zoom, 1.0, 1.0),
-                    transformHitTests: true,
-                    child: OverflowBox(
-                      alignment: Alignment.topLeft,
-                      minWidth: 0.0,
-                      maxWidth: double.infinity,
-                      minHeight: 0.0,
-                      maxHeight: double.infinity,
-                      child: SizedBox(
-                        width: _worldExtent,
-                        height: _worldExtent,
-                        child: Stack(
-                          clipBehavior: Clip.hardEdge,
-                          children: _cardWidgets(),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _viewportSize = constraints.biggest;
+        return ClipRect(
+          child: Container(
+            color: t.background,
+            child: Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: _onPointerDown,
+              onPointerMove: _onPointerMove,
+              onPointerUp: _onPointerUp,
+              onPointerCancel: _onPointerUp,
+              onPointerSignal: _onPointerSignal,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.grab,
+                child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    Positioned.fill(
+                      child: RepaintBoundary(
+                        child: CustomPaint(
+                          painter: _SessionCanvasPainter(
+                            sessions: _sessions,
+                            panOffset: _panOffset,
+                            zoom: _zoom,
+                            theme: t,
+                            activeSessionId: widget.activeSessionId,
+                            draggingId: _draggingId,
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    // World-space layer: cards are always laid out at their
+                    // fixed 248x148 size and the whole layer is pan/zoom
+                    // transformed, so card-internal layout never scales with
+                    // `_zoom`. The oversized `OverflowBox` canvas keeps distant
+                    // cards renderable while the page-level `ClipRect` /
+                    // `Clip.hardEdge` Stack clip everything to the viewport.
+                    Positioned.fill(
+                      child: Transform(
+                        transform: Matrix4.identity()
+                          ..translateByDouble(
+                            _panOffset.dx,
+                            _panOffset.dy,
+                            0.0,
+                            1.0,
+                          )
+                          ..scaleByDouble(_zoom, _zoom, 1.0, 1.0),
+                        transformHitTests: true,
+                        child: OverflowBox(
+                          alignment: Alignment.topLeft,
+                          minWidth: 0.0,
+                          maxWidth: double.infinity,
+                          minHeight: 0.0,
+                          maxHeight: double.infinity,
+                          child: SizedBox(
+                            width: _worldExtent,
+                            height: _worldExtent,
+                            child: Stack(
+                              clipBehavior: Clip.hardEdge,
+                              children: _cardWidgets(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (!_loading && _sessions.isEmpty) _emptyHint(t),
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: 16,
+                          left: 16,
+                          right: 16,
+                        ),
+                        child: _overlayBar(t),
+                      ),
+                    ),
+                  ],
                 ),
-                if (!_loading && _sessions.isEmpty) _emptyHint(t),
-                Positioned(left: 12, top: 12, child: _overlayBar(t)),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -490,8 +541,9 @@ class _SessionsPageState extends State<SessionsPage> {
 
   Widget _overlayBar(ChartTheme t) {
     final int total = _sessions.length;
-    final TradingSession? active =
-        widget.activeSessionId == null ? null : _sessionById(widget.activeSessionId!);
+    final TradingSession? active = widget.activeSessionId == null
+        ? null
+        : _sessionById(widget.activeSessionId!);
 
     return Container(
       padding: const EdgeInsets.all(8),
@@ -499,26 +551,33 @@ class _SessionsPageState extends State<SessionsPage> {
         color: t.axisBackground,
         border: Border.all(color: t.border, width: 1),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _overlayButton(
-            t,
-            '+ New Root Session',
-            primary: true,
-            onTap: _createRootSession,
-          ),
-          const SizedBox(width: 8),
-          _overlayButton(t, 'Auto-Layout', onTap: _autoLayout),
-          const SizedBox(width: 8),
-          _overlayButton(t, 'Reset View (100%)', onTap: _resetView),
-          const SizedBox(width: 12),
-          _statusPill(t, '$total session${total == 1 ? '' : 's'}'),
-          if (active != null) ...[
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _overlayButton(
+              t,
+              '+ New Root Session',
+              primary: true,
+              onTap: _createRootSession,
+            ),
             const SizedBox(width: 8),
-            _statusPill(t, 'Active: ${active.name}'),
+            _overlayButton(t, 'Auto-Layout', onTap: _autoLayout),
+            const SizedBox(width: 8),
+            _overlayButton(
+              t,
+              'Reset View (100%)',
+              onTap: () => _resetView(_viewportSize),
+            ),
+            const SizedBox(width: 12),
+            _statusPill(t, '$total session${total == 1 ? '' : 's'}'),
+            if (active != null) ...[
+              const SizedBox(width: 8),
+              _statusPill(t, 'Active: ${active.name}'),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
