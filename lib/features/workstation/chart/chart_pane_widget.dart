@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show clampDouble;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/engine/bar_aggregator.dart';
 import '../../../domain/models/candle.dart';
@@ -145,28 +145,87 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   }
 
   @override
+  void dispose() {
+    _touchLongPressTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant ChartPaneWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(widget.base1mCandles, oldWidget.base1mCandles) ||
-        widget.node.timeframe != oldWidget.node.timeframe) {
-      _rebuildCandles(preserveViewport: true);
+    final bool sameTimeframe =
+        widget.node.timeframe == oldWidget.node.timeframe;
+    if (sameTimeframe &&
+        identical(widget.base1mCandles, oldWidget.base1mCandles)) {
+      // Hover/cursor-only rebuild: never re-aggregate or touch the viewport.
+      return;
+    }
+    final bool sliceChanged = !identical(
+          widget.base1mCandles,
+          oldWidget.base1mCandles,
+        ) &&
+        _sliceChanged(widget.base1mCandles, oldWidget.base1mCandles);
+    if (!sameTimeframe || sliceChanged) {
+      _rebuildCandles(
+        preserveViewport: true,
+        previousTimeframe: oldWidget.node.timeframe,
+      );
     }
   }
 
-  void _rebuildCandles({required bool preserveViewport}) {
-    final double? oldSpan = preserveViewport && _candles.isNotEmpty
-        ? _viewport.visibleBarCount
-        : null;
+  bool _sliceChanged(List<Candle> a, List<Candle> b) {
+    if (a.length != b.length) return true;
+    if (a.isEmpty && b.isEmpty) return false;
+    if (a.isEmpty || b.isEmpty) return true;
+    return a.first.time != b.first.time || a.last.time != b.last.time;
+  }
+
+  void _rebuildCandles({
+    required bool preserveViewport,
+    Timeframe? previousTimeframe,
+  }) {
+    final bool hasOld =
+        preserveViewport && _candles.isNotEmpty && _viewport.visibleBarCount > 0;
+    final int oldLen = _candles.length;
+    final double oldStart = hasOld ? _viewport.startIndex : 0;
+    final double oldEnd = hasOld ? _viewport.endIndex : 0;
+    final double oldSpan = hasOld ? _viewport.visibleBarCount : 80.0;
+    final bool sameTimeframe =
+        previousTimeframe == null || previousTimeframe == widget.node.timeframe;
 
     _candles = BarAggregator.aggregate(widget.base1mCandles, widget.node.timeframe);
 
-    final double end = _candles.length + rightMarginBars;
-    final double span = oldSpan ?? 80.0;
-    final double start = math.max(0.0, end - span);
+    final double maxEnd = _candles.length + rightMarginBars;
+    const double minStart = -10.0;
+
+    double newStart;
+    double newEnd;
+    if (!hasOld || !sameTimeframe) {
+      // Fresh mount or timeframe switch: snap to the right edge.
+      newEnd = maxEnd;
+      newStart = math.max(0.0, newEnd - oldSpan);
+    } else {
+      final bool atRightEdge = oldEnd >= oldLen - 1;
+      final double shift = atRightEdge
+          ? (_candles.length - oldLen).toDouble()
+          : 0.0;
+      newStart = oldStart + shift;
+      newEnd = oldEnd + shift;
+
+      final double span = newEnd - newStart;
+      final double maxStart = maxEnd - span;
+      if (maxStart <= minStart) {
+        newStart = (minStart + maxStart) / 2.0;
+        newEnd = newStart + span;
+      } else {
+        newStart = clampDouble(newStart, minStart, maxStart);
+        newEnd = newStart + span;
+      }
+    }
 
     _viewport = ChartViewport(
-      startIndex: start,
-      endIndex: end,
+      startIndex: newStart,
+      endIndex: newEnd,
       minPrice: 0,
       maxPrice: 100,
       autoScaleY: true,
@@ -193,13 +252,16 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       widget.onFocusRequested?.call();
 
       // Cancel a pending order via its ✕ badge or a right-click on the line.
+      final double touchHalo = _tol(event.kind, 10.0, 22.0);
+      final double touchX = _tol(event.kind, 20.0, 28.0);
       for (final order in widget.pendingOrders) {
         final double orderY =
             _viewport.priceToY(order.entryPrice, _chartSize.height);
         final bool leftCancel = event.buttons == kPrimaryButton &&
-            event.localPosition.dx >= _chartSize.width - 20.0 &&
-            (event.localPosition.dy - orderY).abs() <= 10.0;
-        final bool rightCancel = event.buttons == kSecondaryMouseButton &&
+            event.localPosition.dx >= _chartSize.width - touchX &&
+            (event.localPosition.dy - orderY).abs() <= touchHalo;
+        final bool rightCancel = event.kind == PointerDeviceKind.mouse &&
+            event.buttons == kSecondaryMouseButton &&
             (event.localPosition.dy - orderY).abs() <= 8.0;
         if (leftCancel || rightCancel) {
           widget.onCancelPendingOrder?.call(order.id);
@@ -220,8 +282,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
           widget.openPosition!.entryPrice,
           _chartSize.height,
         );
-        if (event.localPosition.dx >= _chartSize.width - 20.0 &&
-            (posY - event.localPosition.dy).abs() <= 10.0) {
+        if (event.localPosition.dx >= _chartSize.width - touchX &&
+            (posY - event.localPosition.dy).abs() <= touchHalo) {
           widget.onClosePosition?.call();
           return;
         }
@@ -229,34 +291,37 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       final double? slBadge = widget.openPosition?.currentSl;
       if (slBadge != null) {
         final double slY = _viewport.priceToY(slBadge, _chartSize.height);
-        if (event.localPosition.dx >= _chartSize.width - 20.0 &&
-            (slY - event.localPosition.dy).abs() <= 10.0) {
+        if (event.localPosition.dx >= _chartSize.width - touchX &&
+            (slY - event.localPosition.dy).abs() <= touchHalo) {
           widget.onRemoveSl?.call();
           return;
         }
       }
 
       final double y = event.localPosition.dy;
+      final double lineTol = _tol(event.kind, 8.0, 22.0);
       final double? sl = widget.openPosition?.currentSl;
       if (sl != null &&
-          (_viewport.priceToY(sl, _chartSize.height) - y).abs() <= 8.0) {
+          (_viewport.priceToY(sl, _chartSize.height) - y).abs() <= lineTol) {
         setState(() => _draggingLineId = 'SL');
         return;
       }
       for (final order in widget.pendingOrders) {
         if ((_viewport.priceToY(order.entryPrice, _chartSize.height) - y)
                 .abs() <=
-            8.0) {
+            lineTol) {
           setState(() => _draggingLineId = order.id);
           return;
         }
       }
 
       // Path selection / dot dragging.
+      final double dotTol = _tol(event.kind, 9.0, 22.0);
+      final double segTol = _tol(event.kind, 7.0, 18.0);
       for (final path in widget.paths) {
         for (int i = 0; i < path.points.length; i++) {
           if ((event.localPosition - _anchorScreen(path.points[i])).distance <=
-              9.0) {
+              dotTol) {
             widget.onSelectPath?.call(path.id, i);
             setState(() {
               _draggingPathId = path.id;
@@ -270,7 +335,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
         for (int i = 0; i + 1 < path.points.length; i++) {
           final Offset a = _anchorScreen(path.points[i]);
           final Offset b = _anchorScreen(path.points[i + 1]);
-          if (_distToSegment(event.localPosition, a, b) <= 7.0) {
+          if (_distToSegment(event.localPosition, a, b) <= segTol) {
             widget.onSelectPath?.call(path.id, null);
             return;
           }
@@ -320,21 +385,105 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   }
 
   // --------------------------------------------------------------------------
-  // Chart gestures
+  // Chart gestures (arena-free, deterministic pointer tracking)
   // --------------------------------------------------------------------------
-  void _onChartPanUpdate(DragUpdateDetails details) {
+  Offset _scaleStartFocal = Offset.zero;
+  double _scaleStartSpan = 0;
+  double _scaleStartStart = 0;
+  double _scaleStartMinPrice = 0;
+  double _scaleStartMaxPrice = 0;
+
+  final Map<int, Offset> _pointers = <int, Offset>{};
+  final Map<int, PointerDeviceKind> _pointerKinds = <int, PointerDeviceKind>{};
+  double _pinchStartDistance = 1.0;
+
+  bool _longPressActive = false;
+  Timer? _touchLongPressTimer;
+  Offset? _downPos;
+  DateTime? _lastTapTime;
+  Offset? _lastTapPos;
+
+  double _tol(PointerDeviceKind kind, double mouse, double touch) =>
+      kind == PointerDeviceKind.touch ? touch : mouse;
+
+  Offset get _pointerMidpoint {
+    final Iterable<Offset> values = _pointers.values;
+    if (values.isEmpty) return Offset.zero;
+    double sx = 0;
+    double sy = 0;
+    for (final Offset p in values) {
+      sx += p.dx;
+      sy += p.dy;
+    }
+    return Offset(sx / values.length, sy / values.length);
+  }
+
+  Iterable<Offset> get _firstTwoPointers => _pointers.values.take(2);
+
+  void _snapshotScaleStart(Offset focal) {
+    _scaleStartFocal = focal;
+    _scaleStartSpan = _viewport.visibleBarCount;
+    _scaleStartStart = _viewport.startIndex;
+    _scaleStartMinPrice = _viewport.minPrice;
+    _scaleStartMaxPrice = _viewport.maxPrice;
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    _pointerKinds[event.pointer] = event.kind;
+
+    if (widget.isDrawingPath) {
+      _onChartPointerDown(event);
+      return;
+    }
+
+    if (_pointers.length == 1) {
+      _onChartPointerDown(event);
+      if (_draggingLineId != null || _draggingPathId != null) return;
+
+      _downPos = event.localPosition;
+      _snapshotScaleStart(event.localPosition);
+      if (event.kind == PointerDeviceKind.touch) {
+        _touchLongPressTimer?.cancel();
+        _touchLongPressTimer =
+            Timer(const Duration(milliseconds: 450), _activateTouchLongPress);
+      }
+    } else if (_pointers.length == 2) {
+      _touchLongPressTimer?.cancel();
+      _touchLongPressTimer = null;
+      _longPressActive = false;
+      final List<Offset> pts = _firstTwoPointers.toList();
+      _pinchStartDistance = math.max((pts[0] - pts[1]).distance, 1.0);
+      _snapshotScaleStart(_pointerMidpoint);
+    }
+  }
+
+  void _activateTouchLongPress() {
+    if (!mounted || _downPos == null) return;
+    setState(() {
+      _longPressActive = true;
+      _cursorPos = _downPos;
+    });
+    _reportHoverTime();
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (!_pointers.containsKey(event.pointer)) return;
+    _pointers[event.pointer] = event.localPosition;
+
+    // Line / path-point dragging takes priority over pan and zoom.
     if (_draggingPathId != null && _draggingPointIndex != null) {
       widget.onUpdatePathPoint?.call(
         _draggingPathId!,
         _draggingPointIndex!,
-        _anchorAt(details.localPosition),
+        _anchorAt(event.localPosition),
       );
       setState(() {});
       return;
     }
     if (_draggingLineId != null) {
       final double price =
-          _viewport.yToPrice(details.localPosition.dy, _chartSize.height);
+          _viewport.yToPrice(event.localPosition.dy, _chartSize.height);
       if (_draggingLineId == 'SL') {
         widget.onUpdateSl?.call(price);
       } else {
@@ -343,43 +492,172 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       setState(() {});
       return;
     }
-    if (_chartSize.width <= 0 || _chartSize.height <= 0) return;
 
-    setState(() {
-      final barsPerPixel = _viewport.visibleBarCount / _chartSize.width;
-      final deltaBars = -details.delta.dx * barsPerPixel;
+    if (_longPressActive && _pointers.length == 1) {
+      if (_chartSize.width <= 0 || _chartSize.height <= 0) return;
+      setState(() => _cursorPos = event.localPosition);
+      _reportHoverTime();
+      return;
+    }
 
-      double newStart = _viewport.startIndex + deltaBars;
-      double newEnd = _viewport.endIndex + deltaBars;
-
-      final span = _viewport.visibleBarCount;
-      final double maxEnd = _candles.length + rightMarginBars;
-      const double minStart = -10.0;
-      final double maxStart = maxEnd - span;
-      if (maxStart <= minStart) {
-        // All bars fit inside viewport: hold steady without oscillating
-        newStart = (minStart + maxStart) / 2.0;
-        newEnd = newStart + span;
-      } else {
-        newStart = clampDouble(newStart, minStart, maxStart);
-        newEnd = newStart + span;
+    if (_pointers.length == 1) {
+      if (_downPos != null &&
+          (event.localPosition - _downPos!).distance > 8.0) {
+        _touchLongPressTimer?.cancel();
+        _touchLongPressTimer = null;
       }
+      if (_chartSize.width <= 0 || _chartSize.height <= 0) return;
 
-      _viewport.startIndex = newStart;
-      _viewport.endIndex = newEnd;
+      setState(() {
+        final double dx = event.localPosition.dx - _scaleStartFocal.dx;
+        final double dy = event.localPosition.dy - _scaleStartFocal.dy;
+        final double barsPerPixel = _scaleStartSpan / _chartSize.width;
+        final double deltaBars = -dx * barsPerPixel;
 
-      if (!_viewport.autoScaleY) {
-        final pricePerPixel = _viewport.priceRange / _chartSize.height;
-        final deltaPrice = details.delta.dy * pricePerPixel;
-        _viewport.minPrice += deltaPrice;
-        _viewport.maxPrice += deltaPrice;
-      } else {
+        double newStart = _scaleStartStart + deltaBars;
+        double newEnd = newStart + _scaleStartSpan;
+        final double maxEnd = _candles.length + rightMarginBars;
+        const double minStart = -10.0;
+        final double maxStart = maxEnd - _scaleStartSpan;
+        if (maxStart <= minStart) {
+          newStart = (minStart + maxStart) / 2.0;
+          newEnd = newStart + _scaleStartSpan;
+        } else {
+          newStart = clampDouble(newStart, minStart, maxStart);
+          newEnd = newStart + _scaleStartSpan;
+        }
+        _viewport.startIndex = newStart;
+        _viewport.endIndex = newEnd;
+
+        if (!_viewport.autoScaleY) {
+          final double pricePerPixel =
+              (_scaleStartMaxPrice - _scaleStartMinPrice) / _chartSize.height;
+          final double panPrice = dy * pricePerPixel;
+          _viewport.minPrice = _scaleStartMinPrice + panPrice;
+          _viewport.maxPrice = _scaleStartMaxPrice + panPrice;
+        } else {
+          _viewport.fitPriceToVisible(_candles);
+        }
+        _isPanningChart = true;
+      });
+      _reportHoverTime();
+      return;
+    }
+
+    if (_pointers.length >= 2) {
+      if (_chartSize.width <= 0 || _chartSize.height <= 0) return;
+      final List<Offset> pts = _firstTwoPointers.toList();
+      final Offset focal = (pts[0] + pts[1]) / 2.0;
+      final double scale = (pts[0] - pts[1]).distance / _pinchStartDistance;
+
+      setState(() {
+        final double maxSpan = math.max(_candles.length + 30.0, 40.0);
+        final double focalRatio = clampDouble(
+          _scaleStartFocal.dx / _chartSize.width,
+          0.0,
+          1.0,
+        );
+        final double anchorBar = _scaleStartStart + focalRatio * _scaleStartSpan;
+        final double newSpan = clampDouble(
+          _scaleStartSpan / (scale == 0 ? 1 : scale),
+          10.0,
+          maxSpan,
+        );
+        final double barsPerPixel = _scaleStartSpan / _chartSize.width;
+        final double panBars = -(focal.dx - _scaleStartFocal.dx) * barsPerPixel;
+
+        double newStart = anchorBar - focalRatio * newSpan + panBars;
+        double newEnd = newStart + newSpan;
+        final double maxEnd = _candles.length + rightMarginBars;
+        const double minStart = -10.0;
+        final double maxStart = maxEnd - newSpan;
+        if (maxStart <= minStart) {
+          newStart = (minStart + maxStart) / 2.0;
+          newEnd = newStart + newSpan;
+        } else {
+          newStart = clampDouble(newStart, minStart, maxStart);
+          newEnd = newStart + newSpan;
+        }
+        _viewport.startIndex = newStart;
+        _viewport.endIndex = newEnd;
         _viewport.fitPriceToVisible(_candles);
-      }
+      });
+    }
+  }
 
-      _cursorPos = details.localPosition;
-    });
-    _reportHoverTime();
+  void _maybeHandleDoubleTap(PointerUpEvent event, bool wasSingle) {
+    if (widget.isDrawingPath || !wasSingle) return;
+    if (_downPos == null) return;
+    if ((event.localPosition - _downPos!).distance >= 12.0) return;
+    if (_longPressActive) return;
+
+    final DateTime now = DateTime.now();
+    final bool isDouble = _lastTapTime != null &&
+        now.difference(_lastTapTime!).inMilliseconds < 300 &&
+        _lastTapPos != null &&
+        (event.localPosition - _lastTapPos!).distance < 24.0;
+    if (isDouble) {
+      _lastTapTime = null;
+      _lastTapPos = null;
+      _onAutoFit();
+    } else {
+      _lastTapTime = now;
+      _lastTapPos = event.localPosition;
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    final bool wasSingle = _pointers.length == 1;
+    _maybeHandleDoubleTap(event, wasSingle);
+
+    _pointers.remove(event.pointer);
+    _pointerKinds.remove(event.pointer);
+
+    _touchLongPressTimer?.cancel();
+    _touchLongPressTimer = null;
+
+    if (_pointers.length == 1) {
+      _downPos = _pointers.values.first;
+      _snapshotScaleStart(_pointers.values.first);
+    } else if (_pointers.isEmpty) {
+      _longPressActive = false;
+      _downPos = null;
+      setState(() {
+        _isPanningChart = false;
+        _draggingLineId = null;
+        _draggingPathId = null;
+        _draggingPointIndex = null;
+        if (event.kind == PointerDeviceKind.touch && _cursorPos != null) {
+          _cursorPos = null;
+        }
+      });
+      if (event.kind == PointerDeviceKind.touch) {
+        widget.onHoverRangeChanged(null);
+      }
+    }
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _pointers.remove(event.pointer);
+    _pointerKinds.remove(event.pointer);
+    _touchLongPressTimer?.cancel();
+    _touchLongPressTimer = null;
+
+    if (_pointers.length == 1) {
+      _downPos = _pointers.values.first;
+      _snapshotScaleStart(_pointers.values.first);
+    } else if (_pointers.isEmpty) {
+      _longPressActive = false;
+      _downPos = null;
+      setState(() {
+        _isPanningChart = false;
+        _draggingLineId = null;
+        _draggingPathId = null;
+        _draggingPointIndex = null;
+        _cursorPos = null;
+      });
+      widget.onHoverRangeChanged(null);
+    }
   }
 
   void _onChartWheel(PointerSignalEvent event) {
@@ -509,18 +787,12 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                         children: [
                           Expanded(
                             child: Listener(
+                              behavior: HitTestBehavior.opaque,
                               onPointerSignal: _onChartWheel,
-                              onPointerDown: _onChartPointerDown,
-                              onPointerUp: (_) {
-                                if (_draggingLineId != null ||
-                                    _draggingPathId != null) {
-                                  setState(() {
-                                    _draggingLineId = null;
-                                    _draggingPathId = null;
-                                    _draggingPointIndex = null;
-                                  });
-                                }
-                              },
+                              onPointerDown: _onPointerDown,
+                              onPointerMove: _onPointerMove,
+                              onPointerUp: _onPointerUp,
+                              onPointerCancel: _onPointerCancel,
                               child: MouseRegion(
                                 cursor: widget.isDrawingPath
                                     ? SystemMouseCursors.precise
@@ -535,22 +807,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                   setState(() => _cursorPos = null);
                                   widget.onHoverRangeChanged(null);
                                 },
-                                child: GestureDetector(
-                                  onDoubleTap: widget.isDrawingPath
-                                      ? null
-                                      : _onAutoFit,
-                                  onPanStart: (_) =>
-                                      setState(() => _isPanningChart = true),
-                                  onPanEnd: (_) => setState(() {
-                                    _isPanningChart = false;
-                                    _draggingLineId = null;
-                                    _draggingPathId = null;
-                                    _draggingPointIndex = null;
-                                  }),
-                                  onPanUpdate: widget.isDrawingPath
-                                      ? null
-                                      : _onChartPanUpdate,
-                                  child: ClipRect(
+                                child: ClipRect(
                                     child: Stack(
                                       children: [
                                         CustomPaint(
@@ -632,7 +889,6 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                 ),
                               ),
                             ),
-                          ),
                           SizedBox(
                             width: priceAxisWidth,
                             child: MouseRegion(

@@ -41,6 +41,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   late List<Candle> _base1mCandles;
   late ReplayEngine _replayEngine;
+  late List<Candle> _visibleBase1mCandles;
 
   BinaryCandleStore? _candleStore;
 
@@ -81,10 +82,18 @@ class _ChartScreenState extends State<ChartScreen> {
     );
 
     _initDatasetStore();
+    _refreshVisibleCandles();
+
+    final Size viewSize =
+        WidgetsBinding.instance.platformDispatcher.views.first.physicalSize;
+    final double logicalWidth =
+        viewSize.width / WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
+    final Axis initialDirection =
+        logicalWidth < 600 ? Axis.vertical : Axis.horizontal;
 
     _rootNode = SplitNode(
       id: 'root-split',
-      direction: Axis.horizontal,
+      direction: initialDirection,
       ratio: 0.5,
       first: const PaneNode(id: 'pane-left', timeframe: Timeframe.m15),
       second: const PaneNode(id: 'pane-right', timeframe: Timeframe.h1),
@@ -239,11 +248,21 @@ class _ChartScreenState extends State<ChartScreen> {
   ];
 
   void _stepForward({int steps = 1}) {
-    setState(() => _replayEngine.stepForward(_replayCadence, steps: steps));
+    setState(() {
+      _replayEngine.stepForward(_replayCadence, steps: steps);
+      _refreshVisibleCandles();
+    });
   }
 
   void _stepBack() {
-    setState(() => _replayEngine.stepBack(_replayCadence));
+    setState(() {
+      _replayEngine.stepBack(_replayCadence);
+      _refreshVisibleCandles();
+    });
+  }
+
+  void _refreshVisibleCandles() {
+    _visibleBase1mCandles = _replayEngine.visibleBase1mCandles.toList();
   }
 
   void _cycleCadence() {
@@ -327,7 +346,7 @@ class _ChartScreenState extends State<ChartScreen> {
         Expanded(
           child: TilingTreeView(
             node: _rootNode,
-            base1mCandles: _replayEngine.visibleBase1mCandles.toList(),
+            base1mCandles: _visibleBase1mCandles,
             theme: t,
             isDrawingPath: _isDrawingPath,
             paths: _paths,

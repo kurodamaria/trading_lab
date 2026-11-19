@@ -119,7 +119,7 @@ class TilingTreeView extends StatelessWidget {
           final double total = horizontal
               ? constraints.maxWidth
               : constraints.maxHeight;
-          final double usable = total - 6.0;
+          final double usable = total - 16.0;
           final double firstSize =
               (usable * n.ratio).clamp(0.0, usable).toDouble();
 
@@ -164,7 +164,7 @@ class TilingTreeView extends StatelessWidget {
               final Offset local = box.globalToLocal(d.globalPosition);
               final double pointerPos = horizontal ? local.dx : local.dy;
               final double newRatio =
-                  ((pointerPos - 3.0) / usable).clamp(0.05, 0.95);
+                  ((pointerPos - 8.0) / usable).clamp(0.05, 0.95);
               onTreeChanged(root.updateSplitRatio(n.id, newRatio));
             },
           );
@@ -216,8 +216,8 @@ class _DividerState extends State<_Divider> {
     final bool horizontal = widget.horizontal;
     final bool active = _isHovered || _isDragging;
 
-    final double width = horizontal ? 6.0 : double.infinity;
-    final double height = horizontal ? double.infinity : 6.0;
+    final double width = horizontal ? 16.0 : double.infinity;
+    final double height = horizontal ? double.infinity : 16.0;
 
     final Widget hairline = Container(
       width: horizontal ? (active ? 2.0 : 1.0) : double.infinity,

@@ -30,7 +30,7 @@ class DatasetsPage extends StatefulWidget {
 }
 
 class _DatasetsPageState extends State<DatasetsPage> {
-  static const int windowSize = 15000;
+  static const int windowSize = 250000;
 
   List<DatasetMetadata> _datasets = const <DatasetMetadata>[];
   bool _importing = false;
@@ -278,17 +278,28 @@ class _DatasetsPageState extends State<DatasetsPage> {
       );
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: t.axisBackground,
-        border: Border.all(color: t.border, width: 1),
-      ),
-      child: Column(
-        children: [
-          _rowHeader(t),
-          ..._datasets.map((m) => _row(t, m)),
-        ],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double tableWidth = math.max(constraints.maxWidth, 820);
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: tableWidth,
+            child: Container(
+              decoration: BoxDecoration(
+                color: t.axisBackground,
+                border: Border.all(color: t.border, width: 1),
+              ),
+              child: Column(
+                children: [
+                  _rowHeader(t),
+                  ..._datasets.map((m) => _row(t, m)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -300,14 +311,19 @@ class _DatasetsPageState extends State<DatasetsPage> {
       ),
       child: Row(
         children: [
-          _cell(t, 'NAME', 180, bold: true),
-          _cell(t, 'SHA-256', 120, bold: true),
-          _cell(t, 'BARS', 80, bold: true),
-          _cell(t, 'RANGE', 230, bold: true),
-          _cell(t, 'SIZE', 90, bold: true),
-          _cell(t, 'STATUS', 130, bold: true),
-          const Spacer(),
-          _cell(t, 'ACTIONS', 130, bold: true),
+          Expanded(flex: 3, child: _cell(t, 'NAME', bold: true)),
+          Expanded(flex: 2, child: _cell(t, 'SHA-256', bold: true)),
+          Expanded(flex: 1, child: _cell(t, 'BARS', bold: true)),
+          Expanded(flex: 3, child: _cell(t, 'RANGE', bold: true)),
+          Expanded(flex: 1, child: _cell(t, 'SIZE', bold: true)),
+          Expanded(flex: 2, child: _cell(t, 'STATUS', bold: true)),
+          SizedBox(
+            width: 156,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: _cell(t, 'ACTIONS', bold: true),
+            ),
+          ),
         ],
       ),
     );
@@ -321,70 +337,72 @@ class _DatasetsPageState extends State<DatasetsPage> {
       ),
       child: Row(
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 180,
-                child: Text(
-                  m.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: t.textPrimary,
-                    fontFamily: t.fontFamily,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-            ],
-          ),
-          _cell(t, m.sha256.substring(0, 12), 120),
-          _cell(t, '${m.barCount}', 80),
-          SizedBox(
-            width: 230,
+          Expanded(
+            flex: 3,
             child: Text(
-              '${_fmt(m.firstTime)} → ${_fmt(m.lastTime)}',
+              m.name,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: t.textSecondary,
+                color: t.textPrimary,
                 fontFamily: t.fontFamily,
                 fontSize: 12,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          _cell(
-            t,
-            '${(m.binSizeBytes / (1024 * 1024)).toStringAsFixed(2)} MB',
-            90,
+          Expanded(flex: 2, child: _cell(t, m.sha256.substring(0, 12))),
+          Expanded(flex: 1, child: _cell(t, '${m.barCount}')),
+          Expanded(
+            flex: 3,
+            child: _cell(
+              t,
+              '${_fmt(m.firstTime)} → ${_fmt(m.lastTime)}',
+              color: t.textSecondary,
+            ),
           ),
-          SizedBox(
-            width: 130,
-            child: Text(
+          Expanded(
+            flex: 1,
+            child: _cell(
+              t,
+              '${(m.binSizeBytes / (1024 * 1024)).toStringAsFixed(2)} MB',
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: _cell(
+              t,
               m.sessionIds.isNotEmpty
                   ? 'Locked: ${m.sessionIds.length} sessions'
                   : 'Unlocked',
-              style: TextStyle(
-                color: m.sessionIds.isNotEmpty
-                    ? t.pendingSellBackground
-                    : t.textSecondary,
-                fontFamily: t.fontFamily,
-                fontSize: 12,
-              ),
+              color: m.sessionIds.isNotEmpty
+                  ? t.pendingSellBackground
+                  : t.textSecondary,
             ),
           ),
-          const Spacer(),
-          _ActionPill(
-            theme: t,
-            label: 'Inspect',
-            onTap: () => _openInspect(m),
-          ),
-          const SizedBox(width: 6),
-          _ActionPill(
-            theme: t,
-            label: 'Delete',
-            secondary: true,
-            onTap: () => _delete(m),
+          SizedBox(
+            width: 156,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ActionPill(
+                    theme: t,
+                    label: 'Inspect',
+                    onTap: () => _openInspect(m),
+                  ),
+                  const SizedBox(width: 6),
+                  _ActionPill(
+                    theme: t,
+                    label: 'Delete',
+                    secondary: true,
+                    onTap: () => _delete(m),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -395,7 +413,7 @@ class _DatasetsPageState extends State<DatasetsPage> {
   // Read-only inspection
   // ---------------------------------------------------------------------------
   void _openInspect(DatasetMetadata m) {
-    final int start = math.max(0, m.barCount - windowSize);
+    final int start = m.barCount <= windowSize ? 0 : m.barCount - windowSize;
     final int count = math.min(windowSize, m.barCount - start);
     final List<Candle> candles =
         widget.store.readRange(m.sha256, startIndex: start, count: count);
@@ -418,7 +436,8 @@ class _DatasetsPageState extends State<DatasetsPage> {
   void _shiftInspectWindow(int delta) {
     final DatasetMetadata? m = _inspecting;
     if (m == null) return;
-    final int maxStart = math.max(0, m.barCount - windowSize);
+    final int maxStart =
+        m.barCount <= windowSize ? 0 : m.barCount - windowSize;
     final int newStart = (_windowStart + delta).clamp(0, maxStart);
     final int count = math.min(windowSize, m.barCount - newStart);
     final List<Candle> candles =
@@ -441,7 +460,7 @@ class _DatasetsPageState extends State<DatasetsPage> {
 
   Widget _inspectView(ChartTheme t) {
     final DatasetMetadata meta = _inspecting!;
-    final int maxStart = math.max(0, meta.barCount - windowSize);
+    final int maxStart = meta.barCount <= windowSize ? 0 : meta.barCount - windowSize;
     final bool canPrev = _windowStart > 0;
     final bool canNext = _windowStart < maxStart;
 
@@ -466,34 +485,50 @@ class _DatasetsPageState extends State<DatasetsPage> {
                   onTap: _closeInspect,
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  meta.name,
-                  style: TextStyle(
-                    color: t.textPrimary,
-                    fontFamily: t.fontFamily,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          meta.name,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: t.textPrimary,
+                            fontFamily: t.fontFamily,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        meta.sha256.substring(0, 12),
+                        style: TextStyle(
+                          color: t.textSecondary,
+                          fontFamily: t.fontFamily,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Flexible(
+                        child: Text(
+                          'Bars ${_windowStart + 1}–${_windowStart + _inspectCandles.length} of ${meta.barCount}',
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: t.textSecondary,
+                            fontFamily: t.fontFamily,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  meta.sha256.substring(0, 12),
-                  style: TextStyle(
-                    color: t.textSecondary,
-                    fontFamily: t.fontFamily,
-                    fontSize: 11,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Text(
-                  'Bars ${_windowStart + 1}–${_windowStart + _inspectCandles.length} of ${meta.barCount}',
-                  style: TextStyle(
-                    color: t.textSecondary,
-                    fontFamily: t.fontFamily,
-                    fontSize: 11,
-                  ),
-                ),
-                const Spacer(),
                 _ActionPill(
                   theme: t,
                   label: '◀ Prev',
@@ -543,21 +578,20 @@ class _DatasetsPageState extends State<DatasetsPage> {
 
   Widget _cell(
     ChartTheme t,
-    String text,
-    double width, {
+    String text, {
     Color? color,
     bool bold = false,
   }) {
-    return SizedBox(
-      width: width,
-      child: Text(
-        text,
-        style: TextStyle(
-          color: color ?? t.textPrimary,
-          fontFamily: t.fontFamily,
-          fontSize: 12,
-          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-        ),
+    return Text(
+      text,
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: color ?? t.textPrimary,
+        fontFamily: t.fontFamily,
+        fontSize: 12,
+        fontWeight: bold ? FontWeight.bold : FontWeight.normal,
       ),
     );
   }

@@ -18,6 +18,111 @@ int computeTimeStep(double visibleBars) {
   return 100;
 }
 
+const double _minTickSpacingPx = 88.0;
+const List<String> _monthAbbr = <String>[
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+class _TimeTick {
+  final double x;
+  final String label;
+  final bool major;
+
+  const _TimeTick({required this.x, required this.label, required this.major});
+}
+
+String _hm(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String _dayLabel(DateTime t) => '${_monthAbbr[t.month - 1]} ${t.day}';
+
+/// Snaps tick candidates to natural calendar boundaries and enforces a strict
+/// minimum pixel separation so time labels never collide at any zoom level.
+List<_TimeTick> _computeTimeTicks(
+  List<Candle> candles,
+  ChartViewport viewport,
+  double width,
+) {
+  if (candles.isEmpty || width <= 0 || viewport.visibleBarCount <= 0) {
+    return const <_TimeTick>[];
+  }
+  final int first = math.max(0, viewport.startIndex.floor());
+  final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
+  if (first > last) return const <_TimeTick>[];
+
+  final Duration visibleSpan =
+      candles[last].time.difference(candles[first].time);
+  final double barSpacing = width / viewport.visibleBarCount;
+
+  int intradayStepMinutes = 0;
+  if (visibleSpan.inDays <= 4) {
+    const List<int> steps = <int>[15, 30, 60, 120, 240, 360, 720];
+    final int barMinutes = candles.length > 1
+        ? math.max(
+            1,
+            candles[1].time.difference(candles[0].time).inMinutes,
+          )
+        : 1;
+    for (final int s in steps) {
+      if ((s / barMinutes) * barSpacing >= _minTickSpacingPx) {
+        intradayStepMinutes = s;
+        break;
+      }
+    }
+    if (intradayStepMinutes == 0) intradayStepMinutes = 720;
+  }
+
+  bool isBoundary(DateTime prev, DateTime t) {
+    if (visibleSpan.inDays > 730) return t.year != prev.year;
+    if (visibleSpan.inDays > 60) {
+      return t.year != prev.year || t.month != prev.month;
+    }
+    if (visibleSpan.inDays > 4) {
+      return t.year != prev.year || t.month != prev.month || t.day != prev.day;
+    }
+    final int minutesOfDay = t.hour * 60 + t.minute;
+    return minutesOfDay % intradayStepMinutes == 0;
+  }
+
+  final List<_TimeTick> out = <_TimeTick>[];
+  DateTime? prev;
+  DateTime? prevPainted;
+  double lastX = -double.infinity;
+
+  for (int i = first; i <= last; i++) {
+    final DateTime t = candles[i].time;
+    if (prev != null && isBoundary(prev, t)) {
+      final double x = viewport.indexToX(i.toDouble(), width);
+      final bool inRange = x >= 0 && x <= width;
+      if (inRange && (x - lastX).abs() >= _minTickSpacingPx) {
+        String label;
+        bool major = true;
+        if (visibleSpan.inDays > 730) {
+          label = t.year.toString();
+        } else if (prevPainted == null) {
+          label = visibleSpan.inDays > 4 ? _dayLabel(t) : _hm(t);
+          major = visibleSpan.inDays > 4;
+        } else if (t.year != prevPainted.year) {
+          label = t.year.toString();
+        } else if (t.month != prevPainted.month) {
+          label = _monthAbbr[t.month - 1];
+        } else if (t.day != prevPainted.day) {
+          label = _dayLabel(t);
+        } else {
+          label = _hm(t);
+          major = false;
+        }
+        out.add(_TimeTick(x: x, label: label, major: major));
+        lastX = x;
+        prevPainted = t;
+      }
+    }
+    prev = t;
+  }
+  return out;
+}
+
 // ============================================================================
 // PAINTER A: MAIN CHART CANVAS (Background + Gridlines + Candles + Paths + Crosshair)
 // ============================================================================
@@ -78,16 +183,16 @@ class MainChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    // Vertical grid lines (matches TimeAxisPainter step)
-    final int step = computeTimeStep(viewport.visibleBarCount);
+    // Vertical grid lines (hierarchical, collision-free)
+    final List<_TimeTick> ticks = _computeTimeTicks(candles, viewport, size.width);
     final int first = math.max(0, viewport.startIndex.floor());
     final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
-
-    for (int i = first; i <= last; i++) {
-      if (i % step == 0) {
-        final x = viewport.indexToX(i.toDouble(), size.width);
-        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-      }
+    for (final _TimeTick tick in ticks) {
+      canvas.drawLine(
+        Offset(tick.x, 0),
+        Offset(tick.x, size.height),
+        gridPaint,
+      );
     }
 
     // Volume histogram (drawn before candlesticks so candles sit on top)
@@ -738,36 +843,31 @@ class TimeAxisPainter extends CustomPainter {
 
     if (candles.isEmpty) return;
 
-    final int step = computeTimeStep(viewport.visibleBarCount);
-    final int first = math.max(0, viewport.startIndex.floor());
-    final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
+    final List<_TimeTick> ticks = _computeTimeTicks(candles, viewport, size.width);
+    for (final _TimeTick tick in ticks) {
+      final double x = tick.x;
 
-    for (int i = first; i <= last; i++) {
-      if (i % step == 0) {
-        final double x = viewport.indexToX(i.toDouble(), size.width);
-        final String label = _formatTime(candles[i].time);
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x, 4),
+        Paint()..color = theme.textSecondary,
+      );
 
-        // Tick mark
-        canvas.drawLine(
-          Offset(x, 0),
-          Offset(x, 4),
-          Paint()..color = theme.textSecondary,
-        );
-
-        final tp = TextPainter(
-          text: TextSpan(
-            text: label,
-            style: TextStyle(
-              color: theme.textSecondary,
-              fontSize: 11,
-              fontFamily: theme.fontFamily,
-            ),
+      final tp = TextPainter(
+        text: TextSpan(
+          text: tick.label,
+          style: TextStyle(
+            color: tick.major ? theme.textPrimary : theme.textSecondary,
+            fontSize: 11,
+            fontFamily: theme.fontFamily,
+            fontWeight: tick.major ? FontWeight.bold : FontWeight.normal,
           ),
-          textDirection: TextDirection.ltr,
-        )..layout();
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
 
-        tp.paint(canvas, Offset(x - tp.width / 2, 7));
-      }
+      if (x - tp.width / 2 < 0 || x + tp.width / 2 > size.width) continue;
+      tp.paint(canvas, Offset(x - tp.width / 2, 7));
     }
 
     // Active crosshair timestamp badge
@@ -780,7 +880,7 @@ class TimeAxisPainter extends CustomPainter {
           snappedIdx.toDouble(),
           size.width,
         );
-        final String label = _formatTime(candles[snappedIdx].time);
+        final String label = _fullTime(candles[snappedIdx].time);
 
         final tp = TextPainter(
           text: TextSpan(
@@ -809,10 +909,11 @@ class TimeAxisPainter extends CustomPainter {
     }
   }
 
-  String _formatTime(DateTime dt) {
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
+  String _fullTime(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$mo-$d ${_hm(dt)}';
   }
 
   @override
