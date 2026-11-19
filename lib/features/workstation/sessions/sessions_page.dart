@@ -61,9 +61,14 @@ class _SessionsPageState extends State<SessionsPage> {
   Offset _dragCardStart = Offset.zero;
   bool _dragMoved = false;
 
+  // Canvas selection (distinct from the active Practice session).
+  String? _selectedSessionId;
+  Offset? _emptyCanvasDownPos;
+
   @override
   void initState() {
     super.initState();
+    _selectedSessionId = widget.activeSessionId;
     _load();
   }
 
@@ -128,6 +133,8 @@ class _SessionsPageState extends State<SessionsPage> {
       if (hit != null && !secondary) {
         final TradingSession? s = _sessionById(hit);
         if (s != null) {
+          setState(() => _selectedSessionId = hit);
+          _emptyCanvasDownPos = null;
           _draggingId = hit;
           _dragPointerStart = e.localPosition;
           _dragCardStart = Offset(s.canvasX, s.canvasY);
@@ -135,10 +142,14 @@ class _SessionsPageState extends State<SessionsPage> {
           return;
         }
       }
+      // Empty canvas: remember the down position so a tap (no drag) clears the
+      // current canvas selection.
+      _emptyCanvasDownPos = e.localPosition;
       _panStartPointer = e.localPosition;
       _panStartOffset = _panOffset;
     } else if (_pointers.length == 2) {
       _draggingId = null;
+      _emptyCanvasDownPos = null;
       final List<Offset> pts = _pointers.values.toList();
       _pinchStartDistance = (pts[0] - pts[1]).distance;
       _pinchStartZoom = _zoom;
@@ -185,6 +196,13 @@ class _SessionsPageState extends State<SessionsPage> {
       _draggingId = null;
       if (dragging != null && _dragMoved) {
         _persistPosition(dragging);
+      }
+      final Offset? emptyDown = _emptyCanvasDownPos;
+      _emptyCanvasDownPos = null;
+      if (dragging == null &&
+          emptyDown != null &&
+          (e.localPosition - emptyDown).distance < 4.0) {
+        setState(() => _selectedSessionId = null);
       }
       _dragMoved = false;
     }
@@ -428,6 +446,7 @@ class _SessionsPageState extends State<SessionsPage> {
                               zoom: _zoom,
                               theme: t,
                               activeSessionId: widget.activeSessionId,
+                              selectedSessionId: _selectedSessionId,
                               draggingId: _draggingId,
                             ),
                           ),
@@ -521,6 +540,7 @@ class _SessionsPageState extends State<SessionsPage> {
           session: s,
           theme: widget.theme,
           active: s.id == widget.activeSessionId,
+          isSelected: s.id == _selectedSessionId,
           isLeaf: !_hasChildren(s.id),
           onOpen: () => widget.onOpenSession(s),
           onFork: s.isCompleted ? () => _forkSession(s) : null,
@@ -648,6 +668,7 @@ class _SessionCard extends StatefulWidget {
   final TradingSession session;
   final ChartTheme theme;
   final bool active;
+  final bool isSelected;
   final bool isLeaf;
   final VoidCallback onOpen;
   final VoidCallback? onFork;
@@ -657,6 +678,7 @@ class _SessionCard extends StatefulWidget {
     required this.session,
     required this.theme,
     required this.active,
+    required this.isSelected,
     required this.isLeaf,
     required this.onOpen,
     required this.onFork,
@@ -675,9 +697,23 @@ class _SessionCardState extends State<_SessionCard> {
     final ChartTheme t = widget.theme;
     final TradingSession s = widget.session;
     final double pnl = s.netPnlPoints;
-    final Color borderColor = widget.active
-        ? t.activePillBackground
-        : (_hovered ? t.textSecondary : t.border);
+    final bool selected = widget.isSelected;
+    final bool active = widget.active;
+
+    // Selected (canvas focus) uses primary ink; active-but-unselected keeps the
+    // terracotta accent; when both, the accent moves to an ACTIVE header tag.
+    final Color borderColor = selected
+        ? t.textPrimary
+        : (active
+            ? t.activePillBackground
+            : (_hovered ? t.textSecondary : t.border));
+    final double borderWidth = (selected || active) ? 2.0 : 1.0;
+    final Color surface = selected
+        ? Color.alphaBlend(
+            t.activePillBackground.withValues(alpha: 0.06),
+            t.background,
+          )
+        : t.background;
 
     return MouseRegion(
       cursor: SystemMouseCursors.grab,
@@ -685,11 +721,17 @@ class _SessionCardState extends State<_SessionCard> {
       onExit: (_) => setState(() => _hovered = false),
       child: Container(
         decoration: BoxDecoration(
-          color: t.background,
-          border: Border.all(
-            color: borderColor,
-            width: widget.active ? 2 : 1,
-          ),
+          color: surface,
+          border: Border.all(color: borderColor, width: borderWidth),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : null,
         ),
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
         child: Column(
@@ -712,6 +754,10 @@ class _SessionCardState extends State<_SessionCard> {
                   ),
                 ),
                 const SizedBox(width: 6),
+                if (active && selected) ...[
+                  _activeTag(t),
+                  const SizedBox(width: 6),
+                ],
                 _tagPill(t, s.changeType),
               ],
             ),
@@ -751,6 +797,23 @@ class _SessionCardState extends State<_SessionCard> {
           fontSize: 9,
           fontWeight: FontWeight.bold,
           letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _activeTag(ChartTheme t) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      color: t.activePillBackground,
+      child: Text(
+        'ACTIVE',
+        style: TextStyle(
+          color: t.activePillText,
+          fontFamily: t.fontFamily,
+          fontSize: 8,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.6,
         ),
       ),
     );
@@ -958,6 +1021,7 @@ class _SessionCanvasPainter extends CustomPainter {
   final double zoom;
   final ChartTheme theme;
   final String? activeSessionId;
+  final String? selectedSessionId;
   final String? draggingId;
 
   _SessionCanvasPainter({
@@ -966,6 +1030,7 @@ class _SessionCanvasPainter extends CustomPainter {
     required this.zoom,
     required this.theme,
     required this.activeSessionId,
+    required this.selectedSessionId,
     required this.draggingId,
   });
 
@@ -1011,14 +1076,38 @@ class _SessionCanvasPainter extends CustomPainter {
       final Offset from = Offset(pr.center.dx, pr.bottom);
       final Offset to = Offset(cr.center.dx, cr.top);
       final double dy = (to.dy - from.dy).abs().clamp(24.0, 200.0);
-      final bool hot = child.id == draggingId ||
+
+      final bool hasSelection = selectedSessionId != null;
+      final bool connected = hasSelection &&
+          (child.id == selectedSessionId || parent.id == selectedSessionId);
+      final bool legacyHot = child.id == draggingId ||
           child.id == activeSessionId ||
           parent.id == activeSessionId;
+
+      final double strokeWidth;
+      final Color strokeColor;
+      final Color dotColor;
+      if (hasSelection) {
+        if (connected) {
+          strokeWidth = 2.0;
+          strokeColor = theme.activePillBackground;
+          dotColor = theme.activePillBackground;
+        } else {
+          strokeWidth = 1.2;
+          strokeColor = theme.border.withValues(alpha: 0.4);
+          dotColor = theme.border.withValues(alpha: 0.4);
+        }
+      } else {
+        strokeWidth = legacyHot ? 2.0 : 1.4;
+        strokeColor = (legacyHot ? theme.activePillBackground : theme.pathColor)
+            .withValues(alpha: legacyHot ? 0.9 : 0.55);
+        dotColor = theme.pathColor.withValues(alpha: legacyHot ? 0.9 : 0.6);
+      }
+
       final Paint paint = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = hot ? 2.0 : 1.4
-        ..color = (hot ? theme.activePillBackground : theme.pathColor)
-            .withValues(alpha: hot ? 0.9 : 0.55);
+        ..strokeWidth = strokeWidth
+        ..color = strokeColor;
 
       final Path path = Path()
         ..moveTo(from.dx, from.dy)
@@ -1031,11 +1120,7 @@ class _SessionCanvasPainter extends CustomPainter {
           to.dy,
         );
       canvas.drawPath(path, paint);
-      canvas.drawCircle(
-        to,
-        2.5,
-        Paint()..color = theme.pathColor.withValues(alpha: hot ? 0.9 : 0.6),
-      );
+      canvas.drawCircle(to, 2.5, Paint()..color = dotColor);
     }
   }
 
@@ -1045,6 +1130,7 @@ class _SessionCanvasPainter extends CustomPainter {
         old.panOffset != panOffset ||
         old.zoom != zoom ||
         old.activeSessionId != activeSessionId ||
+        old.selectedSessionId != selectedSessionId ||
         old.draggingId != draggingId;
   }
 }
