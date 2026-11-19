@@ -420,14 +420,16 @@ class _SessionsPageState extends State<SessionsPage> {
                   children: [
                     Positioned.fill(
                       child: RepaintBoundary(
-                        child: CustomPaint(
-                          painter: _SessionCanvasPainter(
-                            sessions: _sessions,
-                            panOffset: _panOffset,
-                            zoom: _zoom,
-                            theme: t,
-                            activeSessionId: widget.activeSessionId,
-                            draggingId: _draggingId,
+                        child: SizedBox.expand(
+                          child: CustomPaint(
+                            painter: _SessionCanvasPainter(
+                              sessions: _sessions,
+                              panOffset: _panOffset,
+                              zoom: _zoom,
+                              theme: t,
+                              activeSessionId: widget.activeSessionId,
+                              draggingId: _draggingId,
+                            ),
                           ),
                         ),
                       ),
@@ -459,7 +461,7 @@ class _SessionsPageState extends State<SessionsPage> {
                             width: _worldExtent,
                             height: _worldExtent,
                             child: Stack(
-                              clipBehavior: Clip.hardEdge,
+                              clipBehavior: Clip.none,
                               children: _cardWidgets(),
                             ),
                           ),
@@ -475,7 +477,13 @@ class _SessionsPageState extends State<SessionsPage> {
                           left: 16,
                           right: 16,
                         ),
-                        child: _overlayBar(t),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth:
+                                math.max(0.0, constraints.maxWidth - 32.0),
+                          ),
+                          child: _overlayBar(t),
+                        ),
                       ),
                     ),
                   ],
