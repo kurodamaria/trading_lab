@@ -183,6 +183,18 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
     return a.first.time != b.first.time || a.last.time != b.last.time;
   }
 
+  /// Clamps a horizontal viewport `start` so that at least [minVisibleBars]
+  /// bars stay visible at either edge, allowing the view to pan past bar `0`
+  /// and past the last bar while keeping the series anchored to the viewport.
+  double _clampStart(double newStart, double span) {
+    const double minVisibleBars = 3.0;
+    final double keepBars = math.min(minVisibleBars, _candles.length.toDouble());
+    final double minStart = -span + keepBars;
+    final double maxStart =
+        math.max(minStart, _candles.length.toDouble() - keepBars);
+    return clampDouble(newStart, minStart, maxStart);
+  }
+
   void _rebuildCandles({
     required bool preserveViewport,
     Timeframe? previousTimeframe,
@@ -199,7 +211,6 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
     _candles = BarAggregator.aggregate(widget.base1mCandles, widget.node.timeframe);
 
     final double maxEnd = _candles.length + rightMarginBars;
-    const double minStart = -10.0;
 
     double newStart;
     double newEnd;
@@ -212,18 +223,9 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       final double shift = atRightEdge
           ? (_candles.length - oldLen).toDouble()
           : 0.0;
-      newStart = oldStart + shift;
-      newEnd = oldEnd + shift;
-
-      final double span = newEnd - newStart;
-      final double maxStart = maxEnd - span;
-      if (maxStart <= minStart) {
-        newStart = (minStart + maxStart) / 2.0;
-        newEnd = newStart + span;
-      } else {
-        newStart = clampDouble(newStart, minStart, maxStart);
-        newEnd = newStart + span;
-      }
+      final double span = oldEnd - oldStart;
+      newStart = _clampStart(oldStart + shift, span);
+      newEnd = newStart + span;
     }
 
     _viewport = ChartViewport(
@@ -518,17 +520,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
         final double deltaBars = -dx * barsPerPixel;
 
         double newStart = _scaleStartStart + deltaBars;
-        double newEnd = newStart + _scaleStartSpan;
-        final double maxEnd = _candles.length + rightMarginBars;
-        const double minStart = -10.0;
-        final double maxStart = maxEnd - _scaleStartSpan;
-        if (maxStart <= minStart) {
-          newStart = (minStart + maxStart) / 2.0;
-          newEnd = newStart + _scaleStartSpan;
-        } else {
-          newStart = clampDouble(newStart, minStart, maxStart);
-          newEnd = newStart + _scaleStartSpan;
-        }
+        newStart = _clampStart(newStart, _scaleStartSpan);
+        final double newEnd = newStart + _scaleStartSpan;
         _viewport.startIndex = newStart;
         _viewport.endIndex = newEnd;
 
@@ -570,17 +563,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
         final double panBars = -(focal.dx - _scaleStartFocal.dx) * barsPerPixel;
 
         double newStart = anchorBar - focalRatio * newSpan + panBars;
-        double newEnd = newStart + newSpan;
-        final double maxEnd = _candles.length + rightMarginBars;
-        const double minStart = -10.0;
-        final double maxStart = maxEnd - newSpan;
-        if (maxStart <= minStart) {
-          newStart = (minStart + maxStart) / 2.0;
-          newEnd = newStart + newSpan;
-        } else {
-          newStart = clampDouble(newStart, minStart, maxStart);
-          newEnd = newStart + newSpan;
-        }
+        newStart = _clampStart(newStart, newSpan);
+        final double newEnd = newStart + newSpan;
         _viewport.startIndex = newStart;
         _viewport.endIndex = newEnd;
         _viewport.fitPriceToVisible(_candles);
@@ -682,8 +666,10 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       );
       final anchorBar = _viewport.startIndex + cursorRatio * currentSpan;
 
-      _viewport.startIndex = anchorBar - cursorRatio * newSpan;
-      _viewport.endIndex = _viewport.startIndex + newSpan;
+      double newStart = anchorBar - cursorRatio * newSpan;
+      newStart = _clampStart(newStart, newSpan);
+      _viewport.startIndex = newStart;
+      _viewport.endIndex = newStart + newSpan;
       _viewport.fitPriceToVisible(_candles);
     });
   }
@@ -717,8 +703,10 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
         math.max(_candles.length + 30.0, 40.0),
       );
       final rightAnchor = _viewport.endIndex;
-      _viewport.endIndex = rightAnchor;
-      _viewport.startIndex = rightAnchor - newSpan;
+      double newStart = rightAnchor - newSpan;
+      newStart = _clampStart(newStart, newSpan);
+      _viewport.startIndex = newStart;
+      _viewport.endIndex = newStart + newSpan;
       _viewport.fitPriceToVisible(_candles);
     });
   }
@@ -946,6 +934,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                       isActive: _isDraggingTimeAxis,
                                       theme: t,
                                       displayTimezone: widget.displayTimezone,
+                                      barDuration:
+                                          widget.node.timeframe.duration,
                                     ),
                                   ),
                                 ),

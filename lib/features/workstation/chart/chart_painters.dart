@@ -38,34 +38,56 @@ String _hm(DateTime t) =>
 
 String _dayLabel(DateTime t) => '${_monthAbbr[t.month - 1]} ${t.day}';
 
+/// Effective bar spacing, falling back to the neighbour delta and finally to
+/// one minute so extrapolation never divides by zero.
+Duration _effectiveBarDuration(List<Candle> candles, Duration? barDuration) {
+  Duration d = barDuration ??
+      (candles.length > 1
+          ? candles[1].time.difference(candles[0].time)
+          : const Duration(minutes: 1));
+  if (d <= Duration.zero) d = const Duration(minutes: 1);
+  return d;
+}
+
+/// The timestamp for a (possibly out-of-range) bar slot, extrapolating cleanly
+/// into the empty left (`index < 0`) and right (`index >= length`) margins.
+DateTime _timeAtBar(List<Candle> candles, int index, Duration barDuration) {
+  if (candles.isEmpty) return DateTime.now();
+  if (index >= 0 && index < candles.length) return candles[index].time;
+  if (index < 0) {
+    return candles.first.time.subtract(barDuration * -index);
+  }
+  return candles.last.time.add(barDuration * (index - (candles.length - 1)));
+}
+
 /// Snaps tick candidates to natural calendar boundaries and enforces a strict
 /// minimum pixel separation so time labels never collide at any zoom level.
+/// Ticks are extrapolated across empty left/right margins so gridlines and
+/// crosshair timestamps remain continuous when the view pans past the data.
 List<_TimeTick> _computeTimeTicks(
   List<Candle> candles,
   ChartViewport viewport,
   double width, [
   DisplayTimezone tz = DisplayTimezone.utc,
+  Duration? barDuration,
 ]) {
   if (candles.isEmpty || width <= 0 || viewport.visibleBarCount <= 0) {
     return const <_TimeTick>[];
   }
-  final int first = math.max(0, viewport.startIndex.floor());
-  final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
+  final Duration barDur = _effectiveBarDuration(candles, barDuration);
+
+  final int first = viewport.startIndex.floor();
+  final int last = viewport.endIndex.ceil();
   if (first > last) return const <_TimeTick>[];
 
-  final Duration visibleSpan =
-      candles[last].time.difference(candles[first].time);
+  final Duration visibleSpan = _timeAtBar(candles, last, barDur)
+      .difference(_timeAtBar(candles, first, barDur));
   final double barSpacing = width / viewport.visibleBarCount;
 
   int intradayStepMinutes = 0;
   if (visibleSpan.inDays <= 4) {
     const List<int> steps = <int>[15, 30, 60, 120, 240, 360, 720];
-    final int barMinutes = candles.length > 1
-        ? math.max(
-            1,
-            candles[1].time.difference(candles[0].time).inMinutes,
-          )
-        : 1;
+    final int barMinutes = math.max(1, barDur.inMinutes);
     for (final int s in steps) {
       if ((s / barMinutes) * barSpacing >= _minTickSpacingPx) {
         intradayStepMinutes = s;
@@ -93,7 +115,7 @@ List<_TimeTick> _computeTimeTicks(
   double lastX = -double.infinity;
 
   for (int i = first; i <= last; i++) {
-    final DateTime t = tz.toDisplayTime(candles[i].time);
+    final DateTime t = tz.toDisplayTime(_timeAtBar(candles, i, barDur));
     if (prev != null && isBoundary(prev, t)) {
       final double x = viewport.indexToX(i.toDouble(), width);
       final bool inRange = x >= 0 && x <= width;
@@ -189,7 +211,7 @@ class MainChartPainter extends CustomPainter {
 
     // Vertical grid lines (hierarchical, collision-free)
     final List<_TimeTick> ticks =
-        _computeTimeTicks(candles, viewport, size.width, displayTimezone);
+        _computeTimeTicks(candles, viewport, size.width, displayTimezone, barDuration);
     final int first = math.max(0, viewport.startIndex.floor());
     final int last = math.min(candles.length - 1, viewport.endIndex.ceil());
     for (final _TimeTick tick in ticks) {
@@ -823,6 +845,7 @@ class TimeAxisPainter extends CustomPainter {
   final bool isActive;
   final ChartTheme theme;
   final DisplayTimezone displayTimezone;
+  final Duration? barDuration;
 
   TimeAxisPainter({
     required this.candles,
@@ -831,6 +854,7 @@ class TimeAxisPainter extends CustomPainter {
     required this.isActive,
     required this.theme,
     this.displayTimezone = DisplayTimezone.utc,
+    this.barDuration,
   });
 
   @override
@@ -851,7 +875,7 @@ class TimeAxisPainter extends CustomPainter {
     if (candles.isEmpty) return;
 
     final List<_TimeTick> ticks =
-        _computeTimeTicks(candles, viewport, size.width, displayTimezone);
+        _computeTimeTicks(candles, viewport, size.width, displayTimezone, barDuration);
     for (final _TimeTick tick in ticks) {
       final double x = tick.x;
 
@@ -878,43 +902,43 @@ class TimeAxisPainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, 7));
     }
 
-    // Active crosshair timestamp badge
+    // Active crosshair timestamp badge (extrapolates into empty margins).
     if (cursorPos != null &&
         cursorPos!.dx >= 0 &&
         cursorPos!.dx <= size.width) {
+      final Duration barDur = _effectiveBarDuration(candles, barDuration);
       final int snappedIdx = viewport.xToIndex(cursorPos!.dx, size.width).round();
-      if (snappedIdx >= 0 && snappedIdx < candles.length) {
-        final double snappedX = viewport.indexToX(
-          snappedIdx.toDouble(),
-          size.width,
-        );
-        final String label =
-            _fullTime(displayTimezone.toDisplayTime(candles[snappedIdx].time));
+      final double snappedX = viewport.indexToX(
+        snappedIdx.toDouble(),
+        size.width,
+      );
+      final String label = _fullTime(
+        displayTimezone.toDisplayTime(_timeAtBar(candles, snappedIdx, barDur)),
+      );
 
-        final tp = TextPainter(
-          text: TextSpan(
-            text: label,
-            style: TextStyle(
-              color: theme.badgeText,
-              fontSize: 11,
-              fontFamily: theme.fontFamily,
-            ),
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: theme.badgeText,
+            fontSize: 11,
+            fontFamily: theme.fontFamily,
           ),
-          textDirection: TextDirection.ltr,
-        )..layout();
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
 
-        final double badgeW = tp.width + 12;
-        final double badgeX = clampDouble(
-          snappedX - badgeW / 2,
-          0,
-          size.width - badgeW,
-        );
-        canvas.drawRect(
-          Rect.fromLTWH(badgeX, 1, badgeW, size.height - 2),
-          Paint()..color = theme.badgeBackground,
-        );
-        tp.paint(canvas, Offset(badgeX + 6, 7));
-      }
+      final double badgeW = tp.width + 12;
+      final double badgeX = clampDouble(
+        snappedX - badgeW / 2,
+        0,
+        size.width - badgeW,
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(badgeX, 1, badgeW, size.height - 2),
+        Paint()..color = theme.badgeBackground,
+      );
+      tp.paint(canvas, Offset(badgeX + 6, 7));
     }
   }
 
