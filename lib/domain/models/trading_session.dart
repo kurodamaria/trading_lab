@@ -104,6 +104,7 @@ class TradingSession {
   final List<CompletedTrade> closedTrades;
   final OpenPosition? openPosition;
   final List<PendingOrder> pendingOrders;
+  final List<CanceledOrder> canceledOrders;
   final List<CrossTimeframePath> paths;
 
   // Spatial position on the sessions canvas.
@@ -129,6 +130,7 @@ class TradingSession {
     this.closedTrades = const [],
     this.openPosition,
     this.pendingOrders = const [],
+    this.canceledOrders = const [],
     this.paths = const [],
     this.canvasX = 0.0,
     this.canvasY = 0.0,
@@ -188,6 +190,7 @@ class TradingSession {
     List<CompletedTrade>? closedTrades,
     Object? openPosition = _unset,
     List<PendingOrder>? pendingOrders,
+    List<CanceledOrder>? canceledOrders,
     List<CrossTimeframePath>? paths,
     double? canvasX,
     double? canvasY,
@@ -213,6 +216,7 @@ class TradingSession {
           ? this.openPosition
           : openPosition as OpenPosition?,
       pendingOrders: pendingOrders ?? this.pendingOrders,
+      canceledOrders: canceledOrders ?? this.canceledOrders,
       paths: paths ?? this.paths,
       canvasX: canvasX ?? this.canvasX,
       canvasY: canvasY ?? this.canvasY,
@@ -240,6 +244,7 @@ class TradingSession {
         'openPosition':
             openPosition == null ? null : _positionToJson(openPosition!),
         'pendingOrders': pendingOrders.map(_pendingToJson).toList(),
+        'canceledOrders': canceledOrders.map(_canceledToJson).toList(),
         'paths': paths.map(_pathToJson).toList(),
         'canvasX': canvasX,
         'canvasY': canvasY,
@@ -279,6 +284,8 @@ class TradingSession {
           : _positionFromJson(_map(json['openPosition'])),
       pendingOrders:
           _list(json['pendingOrders']).map(_pendingFromJson).toList(),
+      canceledOrders:
+          _list(json['canceledOrders']).map(_canceledFromJson).toList(),
       paths: _list(json['paths']).map(_pathFromJson).toList(),
       canvasX: (json['canvasX'] as num?)?.toDouble() ?? 0.0,
       canvasY: (json['canvasY'] as num?)?.toDouble() ?? 0.0,
@@ -367,6 +374,38 @@ PendingOrder _pendingFromJson(Map<String, dynamic> j) => PendingOrder(
       stopLoss: (j['stopLoss'] as num?)?.toDouble(),
       createdTime: DateTime.parse(j['createdTime'] as String),
       events: _list(j['events']).map(_eventFromJson).toList(),
+    );
+
+Map<String, dynamic> _canceledToJson(CanceledOrder o) => <String, dynamic>{
+      'id': o.id,
+      'side': o.side.name,
+      'type': o.type.name,
+      'entryPrice': o.entryPrice,
+      'stopLoss': o.stopLoss,
+      'createdTime': o.createdTime.toIso8601String(),
+      'events': o.events.map(_eventToJson).toList(),
+      'canceledTime': o.canceledTime.toIso8601String(),
+      'cancelReason': o.cancelReason.name,
+    };
+
+CanceledOrder _canceledFromJson(Map<String, dynamic> j) => CanceledOrder(
+      id: j['id'] as String,
+      side: _enumByName(OrderSide.values, j['side'] as String?, OrderSide.buy),
+      type: _enumByName(
+        PendingOrderType.values,
+        j['type'] as String?,
+        PendingOrderType.limit,
+      ),
+      entryPrice: (j['entryPrice'] as num).toDouble(),
+      stopLoss: (j['stopLoss'] as num?)?.toDouble(),
+      createdTime: DateTime.parse(j['createdTime'] as String),
+      events: _list(j['events']).map(_eventFromJson).toList(),
+      canceledTime: DateTime.parse(j['canceledTime'] as String),
+      cancelReason: _enumByName(
+        CancelReason.values,
+        j['cancelReason'] as String?,
+        CancelReason.manualCancel,
+      ),
     );
 
 Map<String, dynamic> _positionToJson(OpenPosition p) => <String, dynamic>{

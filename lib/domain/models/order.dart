@@ -116,6 +116,75 @@ class PendingOrder {
   }
 }
 
+/// Why a pending order never filled.
+enum CancelReason { manualCancel, windowEnd }
+
+extension CancelReasonX on CancelReason {
+  String get label {
+    switch (this) {
+      case CancelReason.manualCancel:
+        return 'Canceled';
+      case CancelReason.windowEnd:
+        return 'Window end';
+    }
+  }
+}
+
+/// A pending order that was canceled by the user or left unfilled when the
+/// replay window ended. Retains the original order details for review.
+class CanceledOrder {
+  final String id;
+  final OrderSide side;
+  final PendingOrderType type;
+  final double entryPrice;
+  final double? stopLoss;
+  final DateTime createdTime;
+  final List<OrderEvent> events;
+  final DateTime canceledTime;
+  final CancelReason cancelReason;
+
+  const CanceledOrder({
+    required this.id,
+    required this.side,
+    required this.type,
+    required this.entryPrice,
+    this.stopLoss,
+    required this.createdTime,
+    this.events = const [],
+    required this.canceledTime,
+    required this.cancelReason,
+  });
+
+  /// Snapshots [order] as canceled, appending an [OrderEventType.canceled]
+  /// event for the cancellation.
+  factory CanceledOrder.fromPending(
+    PendingOrder order, {
+    required DateTime canceledTime,
+    required CancelReason reason,
+  }) {
+    return CanceledOrder(
+      id: order.id,
+      side: order.side,
+      type: order.type,
+      entryPrice: order.entryPrice,
+      stopLoss: order.stopLoss,
+      createdTime: order.createdTime,
+      events: [
+        ...order.events,
+        OrderEvent(
+          seq: -1,
+          time: canceledTime,
+          type: OrderEventType.canceled,
+          price: order.entryPrice,
+          note: reason.name,
+        ),
+      ],
+      canceledTime: canceledTime,
+      cancelReason: reason,
+    );
+  }
+}
+
 class OpenPosition {
   final String id;
   final OrderSide side;

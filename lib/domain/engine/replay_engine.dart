@@ -29,8 +29,8 @@ class ReplayEngine {
   }
 
   /// Rebuilds an engine from a persisted session snapshot: a candle slice,
-  /// cursor position, and any captured open position, pending orders, and
-  /// closed trades.
+  /// cursor position, and any captured open position, pending orders, closed
+  /// trades, and canceled orders.
   factory ReplayEngine.restore({
     required List<Candle> base1mCandles,
     required int initialCursorIndex,
@@ -38,6 +38,7 @@ class ReplayEngine {
     OpenPosition? openPosition,
     List<PendingOrder>? pendingOrders,
     List<CompletedTrade>? closedTrades,
+    List<CanceledOrder>? canceledOrders,
     bool isCompleted = false,
   }) {
     final ReplayEngine engine = ReplayEngine(
@@ -48,6 +49,7 @@ class ReplayEngine {
     engine._openPosition = openPosition;
     engine._pendingOrders.addAll(pendingOrders ?? const <PendingOrder>[]);
     engine._closedTrades.addAll(closedTrades ?? const <CompletedTrade>[]);
+    engine._canceledOrders.addAll(canceledOrders ?? const <CanceledOrder>[]);
     engine._isCompleted = isCompleted;
 
     // Advance the id / event counters past any restored identifiers so new
@@ -56,6 +58,7 @@ class ReplayEngine {
       if (openPosition != null) openPosition.id,
       for (final PendingOrder o in engine._pendingOrders) o.id,
       for (final CompletedTrade t in engine._closedTrades) t.id,
+      for (final CanceledOrder c in engine._canceledOrders) c.id,
     ];
     engine._orderIdCounter = _maxIdSuffix(ids) + 1;
 
@@ -72,6 +75,9 @@ class ReplayEngine {
     }
     for (final CompletedTrade t in engine._closedTrades) {
       scan(t.events);
+    }
+    for (final CanceledOrder c in engine._canceledOrders) {
+      scan(c.events);
     }
     engine._eventSeq = maxSeq + 1;
 
@@ -99,6 +105,7 @@ class ReplayEngine {
   OpenPosition? _openPosition;
   final List<PendingOrder> _pendingOrders = [];
   final List<CompletedTrade> _closedTrades = [];
+  final List<CanceledOrder> _canceledOrders = [];
 
   int _eventSeq = 0;
   int _orderIdCounter = 0;
@@ -121,6 +128,8 @@ class ReplayEngine {
   List<PendingOrder> get pendingOrders => UnmodifiableListView(_pendingOrders);
   List<CompletedTrade> get closedTrades =>
       UnmodifiableListView(_closedTrades);
+  List<CanceledOrder> get canceledOrders =>
+      UnmodifiableListView(_canceledOrders);
   int get eventSeq => _eventSeq;
 
   // ---------------------------------------------------------------------------
@@ -208,7 +217,7 @@ class ReplayEngine {
     if (_openPosition != null) {
       throw StateError('A position is already open');
     }
-    _cancelAllPending(note: 'Canceled on market entry');
+    _cancelAllPending(reason: CancelReason.manualCancel);
 
     final double entry = currentBar.close;
     final double risk = stopLoss != null ? (entry - stopLoss).abs() : 0.0;
@@ -287,20 +296,14 @@ class ReplayEngine {
   void cancelPendingOrder(String orderId) {
     final int idx = _pendingOrders.indexWhere((o) => o.id == orderId);
     if (idx == -1) return;
-    final PendingOrder order = _pendingOrders[idx];
-    _pendingOrders[idx] = PendingOrder(
-      id: order.id,
-      side: order.side,
-      type: order.type,
-      entryPrice: order.entryPrice,
-      stopLoss: order.stopLoss,
-      createdTime: order.createdTime,
-      events: [
-        ...order.events,
-        _evt(currentTime, OrderEventType.canceled, price: order.entryPrice),
-      ],
+    final PendingOrder order = _pendingOrders.removeAt(idx);
+    _canceledOrders.add(
+      CanceledOrder.fromPending(
+        order,
+        canceledTime: currentTime,
+        reason: CancelReason.manualCancel,
+      ),
     );
-    _pendingOrders.removeAt(idx);
   }
 
   // ---------------------------------------------------------------------------
@@ -387,22 +390,15 @@ class ReplayEngine {
     );
   }
 
-  void _cancelAllPending({required String note}) {
+  void _cancelAllPending({required CancelReason reason}) {
     if (_pendingOrders.isEmpty) return;
-    for (int i = 0; i < _pendingOrders.length; i++) {
-      final PendingOrder order = _pendingOrders[i];
-      _pendingOrders[i] = PendingOrder(
-        id: order.id,
-        side: order.side,
-        type: order.type,
-        entryPrice: order.entryPrice,
-        stopLoss: order.stopLoss,
-        createdTime: order.createdTime,
-        events: [
-          ...order.events,
-          _evt(currentTime, OrderEventType.canceled,
-              price: order.entryPrice, note: note),
-        ],
+    for (final PendingOrder order in _pendingOrders) {
+      _canceledOrders.add(
+        CanceledOrder.fromPending(
+          order,
+          canceledTime: currentTime,
+          reason: reason,
+        ),
       );
     }
     _pendingOrders.clear();
@@ -418,7 +414,7 @@ class ReplayEngine {
         reason: ExitReason.windowEnd,
       );
     }
-    _cancelAllPending(note: 'Window end');
+    _cancelAllPending(reason: CancelReason.windowEnd);
     _isCompleted = true;
   }
 
@@ -502,7 +498,7 @@ class ReplayEngine {
 
     // Cancel all remaining pending orders.
     _pendingOrders.removeAt(filledIndex);
-    _cancelAllPending(note: 'Canceled on fill');
+    _cancelAllPending(reason: CancelReason.manualCancel);
 
     // Evaluate whether the SL triggers on this same bar after the fill.
     final double? sl = position.currentSl;

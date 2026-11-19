@@ -51,6 +51,19 @@ class StatsPage extends StatelessWidget {
     final List<CompletedTrade> trades =
         List<CompletedTrade>.from(engine.closedTrades);
 
+    final List<CanceledOrder> canceled =
+        List<CanceledOrder>.from(engine.canceledOrders);
+    int filledPending = 0;
+    for (final CompletedTrade tr in trades) {
+      if (tr.entryType != EntryType.market) filledPending++;
+    }
+    final OpenPosition? open = engine.openPosition;
+    if (open != null && open.entryType != EntryType.market) filledPending++;
+    final int pendingNow = engine.pendingOrders.length;
+    final int pendingPlaced = filledPending + canceled.length + pendingNow;
+    final bool hasPending = pendingPlaced > 0;
+    final double fillRate = hasPending ? filledPending / pendingPlaced : 0.0;
+
     return Container(
       color: t.background,
       child: Column(
@@ -74,6 +87,12 @@ class StatsPage extends StatelessWidget {
                     const SizedBox(height: 20),
                   ],
                   _kpiGrid(t, stats),
+                  if (hasPending) ...[
+                    const SizedBox(height: 20),
+                    _sectionTitle(t, 'ORDER FILL RATE'),
+                    const SizedBox(height: 8),
+                    _fillRateCard(t, filledPending, pendingPlaced, fillRate),
+                  ],
                   const SizedBox(height: 20),
                   _sectionTitle(t, 'EQUITY CURVE'),
                   const SizedBox(height: 8),
@@ -96,9 +115,71 @@ class StatsPage extends StatelessWidget {
                   _sectionTitle(t, 'TRADE LEDGER'),
                   const SizedBox(height: 8),
                   _ledger(t, trades),
+                  if (canceled.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    _sectionTitle(t, 'UNFILLED ORDERS'),
+                    const SizedBox(height: 8),
+                    _UnfilledOrdersSection(
+                      theme: t,
+                      orders: canceled,
+                      displayTimezone: displayTimezone,
+                    ),
+                  ],
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fillRateCard(
+    ChartTheme t,
+    int filled,
+    int placed,
+    double rate,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: t.axisBackground,
+        border: Border.all(color: t.border, width: 1),
+      ),
+      child: Row(
+        children: [
+          Text(
+            '${(rate * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              color: t.textPrimary,
+              fontFamily: t.fontFamily,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'FILL RATE',
+                style: TextStyle(
+                  color: t.textSecondary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 10,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '$filled / $placed pending orders filled',
+                style: TextStyle(
+                  color: t.textPrimary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -906,4 +987,162 @@ class _EquityCurvePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _EquityCurvePainter oldDelegate) => true;
+}
+
+/// Collapsible list of canceled / unfilled pending orders.
+class _UnfilledOrdersSection extends StatefulWidget {
+  final ChartTheme theme;
+  final List<CanceledOrder> orders;
+  final DisplayTimezone displayTimezone;
+
+  const _UnfilledOrdersSection({
+    required this.theme,
+    required this.orders,
+    required this.displayTimezone,
+  });
+
+  @override
+  State<_UnfilledOrdersSection> createState() => _UnfilledOrdersSectionState();
+}
+
+class _UnfilledOrdersSectionState extends State<_UnfilledOrdersSection> {
+  bool _expanded = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final ChartTheme t = widget.theme;
+    return Container(
+      decoration: BoxDecoration(
+        color: t.axisBackground,
+        border: Border.all(color: t.border, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: _expanded ? t.border : Colors.transparent,
+                      width: 1,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      _expanded ? '▼' : '▶',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: t.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'UNFILLED ORDERS',
+                      style: TextStyle(
+                        color: t.textPrimary,
+                        fontFamily: t.fontFamily,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${widget.orders.length} canceled',
+                      style: TextStyle(
+                        color: t.textSecondary,
+                        fontFamily: t.fontFamily,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (_expanded) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.border, width: 1)),
+              ),
+              child: Row(
+                children: [
+                  _cell(t, '#', 40, bold: true),
+                  _cell(t, 'SIDE', 60, bold: true),
+                  _cell(t, 'TYPE', 50, bold: true),
+                  _cell(t, 'PRICE', 90, bold: true),
+                  _cell(t, 'CANCELED', 130, bold: true),
+                  _cell(t, 'REASON', 110, bold: true),
+                ],
+              ),
+            ),
+            ...widget.orders.asMap().entries.map(
+                  (e) => _row(t, e.key + 1, e.value),
+                ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(ChartTheme t, int index, CanceledOrder order) {
+    final bool isLong = order.side == OrderSide.buy;
+    final Color sideColor =
+        isLong ? t.pendingBuyBackground : t.pendingSellBackground;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.gridLine, width: 1)),
+      ),
+      child: Row(
+        children: [
+          _cell(t, '$index', 40),
+          _cell(t, isLong ? 'LONG' : 'SHORT', 60,
+              color: sideColor, bold: true),
+          _cell(t, order.type.name.toUpperCase(), 50),
+          _cell(t, order.entryPrice.toStringAsFixed(2), 90),
+          _cell(t, _fmtTime(order.canceledTime), 130),
+          _cell(t, order.cancelReason.label, 110),
+        ],
+      ),
+    );
+  }
+
+  String _fmtTime(DateTime utcTime) {
+    final DateTime d = widget.displayTimezone.toDisplayTime(utcTime);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} '
+        '${two(d.hour)}:${two(d.minute)}';
+  }
+
+  Widget _cell(
+    ChartTheme t,
+    String text,
+    double width, {
+    Color? color,
+    bool bold = false,
+  }) {
+    return SizedBox(
+      width: width,
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color ?? t.textPrimary,
+          fontFamily: t.fontFamily,
+          fontSize: 12,
+          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
+  }
 }

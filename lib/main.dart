@@ -498,6 +498,7 @@ class _ChartScreenState extends State<ChartScreen> {
       openPosition: session.openPosition,
       pendingOrders: session.pendingOrders,
       closedTrades: session.closedTrades,
+      canceledOrders: session.canceledOrders,
       isCompleted: session.isCompleted,
     );
 
@@ -563,6 +564,7 @@ class _ChartScreenState extends State<ChartScreen> {
       closedTrades: List<CompletedTrade>.from(engine.closedTrades),
       openPosition: engine.openPosition,
       pendingOrders: List<PendingOrder>.from(engine.pendingOrders),
+      canceledOrders: List<CanceledOrder>.from(engine.canceledOrders),
       paths: List<CrossTimeframePath>.from(_paths),
       updatedAt: DateTime.now(),
     );
