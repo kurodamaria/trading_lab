@@ -4,6 +4,34 @@ enum OrderSide { buy, sell }
 /// How a pending order is expected to trigger relative to the current price.
 enum PendingOrderType { limit, stop }
 
+/// How a position was entered.
+enum EntryType { market, limit, stop }
+
+extension EntryTypeX on EntryType {
+  /// Compact badge used in trade logs.
+  String get badge {
+    switch (this) {
+      case EntryType.market:
+        return 'MKT';
+      case EntryType.limit:
+        return 'LMT';
+      case EntryType.stop:
+        return 'STP';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case EntryType.market:
+        return 'Market';
+      case EntryType.limit:
+        return 'Limit';
+      case EntryType.stop:
+        return 'Stop';
+    }
+  }
+}
+
 /// Why a position was closed.
 enum ExitReason { stopLoss, manualClose, windowEnd }
 
@@ -91,6 +119,7 @@ class PendingOrder {
 class OpenPosition {
   final String id;
   final OrderSide side;
+  final EntryType entryType;
   final double entryPrice;
   final DateTime entryTime;
   final double? initialSl;
@@ -104,6 +133,7 @@ class OpenPosition {
   const OpenPosition({
     required this.id,
     required this.side,
+    this.entryType = EntryType.market,
     required this.entryPrice,
     required this.entryTime,
     this.initialSl,
@@ -126,6 +156,7 @@ class OpenPosition {
     return OpenPosition(
       id: id,
       side: side,
+      entryType: entryType,
       entryPrice: entryPrice,
       entryTime: entryTime,
       initialSl: initialSl,
@@ -142,6 +173,7 @@ class OpenPosition {
 class CompletedTrade {
   final String id;
   final OrderSide side;
+  final EntryType entryType;
   final double entryPrice;
   final DateTime entryTime;
   final double exitPrice;
@@ -161,6 +193,7 @@ class CompletedTrade {
   const CompletedTrade({
     required this.id,
     required this.side,
+    this.entryType = EntryType.market,
     required this.entryPrice,
     required this.entryTime,
     required this.exitPrice,
@@ -207,6 +240,7 @@ class CompletedTrade {
     return CompletedTrade(
       id: position.id,
       side: position.side,
+      entryType: position.entryType,
       entryPrice: position.entryPrice,
       entryTime: position.entryTime,
       exitPrice: exitPrice,

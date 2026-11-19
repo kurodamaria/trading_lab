@@ -496,6 +496,7 @@ class StatsPage extends StatelessWidget {
         children: [
           _cell(t, '#', 40, bold: true),
           _cell(t, 'SIDE', 70, bold: true),
+          _cell(t, 'TYPE', 52, bold: true),
           _cell(t, 'TIME', 120, bold: true),
           _cell(t, 'ENTRY', 100, bold: true),
           _cell(t, 'EXIT', 100, bold: true),
@@ -521,6 +522,7 @@ class StatsPage extends StatelessWidget {
         children: [
           _cell(t, '$index', 40),
           _cell(t, isLong ? 'LONG' : 'SHORT', 70, color: sideColor, bold: true),
+          _entryTypeCell(t, trade.entryType),
           _cell(t, _fmtTime(trade.entryTime), 120),
           _cell(t, trade.entryPrice.toStringAsFixed(2), 100),
           _cell(t, trade.exitPrice.toStringAsFixed(2), 100),
@@ -564,6 +566,29 @@ class StatsPage extends StatelessWidget {
           fontFamily: t.fontFamily,
           fontSize: 12,
           fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
+  }
+
+  Widget _entryTypeCell(ChartTheme t, EntryType entryType) {
+    return SizedBox(
+      width: 52,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          color: t.badgeBackground,
+          child: Text(
+            entryType.badge,
+            style: TextStyle(
+              color: t.badgeText,
+              fontFamily: t.fontFamily,
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
         ),
       ),
     );

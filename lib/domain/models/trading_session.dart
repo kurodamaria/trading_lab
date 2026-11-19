@@ -372,6 +372,7 @@ PendingOrder _pendingFromJson(Map<String, dynamic> j) => PendingOrder(
 Map<String, dynamic> _positionToJson(OpenPosition p) => <String, dynamic>{
       'id': p.id,
       'side': p.side.name,
+      'entryType': p.entryType.name,
       'entryPrice': p.entryPrice,
       'entryTime': p.entryTime.toIso8601String(),
       'initialSl': p.initialSl,
@@ -386,6 +387,11 @@ Map<String, dynamic> _positionToJson(OpenPosition p) => <String, dynamic>{
 OpenPosition _positionFromJson(Map<String, dynamic> j) => OpenPosition(
       id: j['id'] as String,
       side: _enumByName(OrderSide.values, j['side'] as String?, OrderSide.buy),
+      entryType: _enumByName(
+        EntryType.values,
+        j['entryType'] as String?,
+        EntryType.market,
+      ),
       entryPrice: (j['entryPrice'] as num).toDouble(),
       entryTime: DateTime.parse(j['entryTime'] as String),
       initialSl: (j['initialSl'] as num?)?.toDouble(),
@@ -400,6 +406,7 @@ OpenPosition _positionFromJson(Map<String, dynamic> j) => OpenPosition(
 Map<String, dynamic> _tradeToJson(CompletedTrade t) => <String, dynamic>{
       'id': t.id,
       'side': t.side.name,
+      'entryType': t.entryType.name,
       'entryPrice': t.entryPrice,
       'entryTime': t.entryTime.toIso8601String(),
       'exitPrice': t.exitPrice,
@@ -420,6 +427,11 @@ Map<String, dynamic> _tradeToJson(CompletedTrade t) => <String, dynamic>{
 CompletedTrade _tradeFromJson(Map<String, dynamic> j) => CompletedTrade(
       id: j['id'] as String,
       side: _enumByName(OrderSide.values, j['side'] as String?, OrderSide.buy),
+      entryType: _enumByName(
+        EntryType.values,
+        j['entryType'] as String?,
+        EntryType.market,
+      ),
       entryPrice: (j['entryPrice'] as num).toDouble(),
       entryTime: DateTime.parse(j['entryTime'] as String),
       exitPrice: (j['exitPrice'] as num).toDouble(),

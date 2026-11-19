@@ -216,6 +216,7 @@ class ReplayEngine {
     final position = OpenPosition(
       id: 'pos-${_orderIdCounter++}',
       side: side,
+      entryType: EntryType.market,
       entryPrice: entry,
       entryTime: currentTime,
       initialSl: stopLoss,
@@ -479,6 +480,9 @@ class ReplayEngine {
     final OpenPosition position = OpenPosition(
       id: 'pos-${_orderIdCounter++}',
       side: order.side,
+      entryType: order.type == PendingOrderType.limit
+          ? EntryType.limit
+          : EntryType.stop,
       entryPrice: entry,
       entryTime: bar.time,
       initialSl: order.stopLoss,
