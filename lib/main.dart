@@ -15,6 +15,7 @@ import 'domain/models/drawing.dart';
 import 'domain/models/order.dart';
 import 'domain/models/timeframe.dart';
 import 'features/workstation/data/datasets_page.dart';
+import 'features/workstation/sessions/sessions_page.dart';
 import 'features/workstation/settings/settings_page.dart';
 import 'features/workstation/stats/stats_page.dart';
 import 'features/workstation/tiling/tiling_node.dart';
@@ -52,7 +53,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   final FocusNode _keyboardFocusNode = FocusNode();
 
-  int _selectedPageIndex = 1;
+  int _selectedPageIndex = 2;
 
   DisplayTimezone _displayTimezone = DisplayTimezone.utcPlus8;
 
@@ -414,6 +415,7 @@ class _ChartScreenState extends State<ChartScreen> {
                     theme: t,
                     displayTimezone: _displayTimezone,
                   ),
+                  const SessionsPage(),
                   workstation,
                   StatsPage(
                     replayEngine: _replayEngine,
@@ -459,27 +461,35 @@ class _ChartScreenState extends State<ChartScreen> {
             ),
             const SizedBox(height: 4),
             _NavRailItem(
-              label: 'Practice',
-              icon: Icons.candlestick_chart,
+              label: 'Sessions',
+              icon: Icons.history_toggle_off,
               theme: t,
               active: _selectedPageIndex == 1,
               onTap: () => setState(() => _selectedPageIndex = 1),
             ),
             const SizedBox(height: 4),
             _NavRailItem(
-              label: 'Stats',
-              icon: Icons.insert_chart_outlined,
+              label: 'Practice',
+              icon: Icons.candlestick_chart,
               theme: t,
               active: _selectedPageIndex == 2,
               onTap: () => setState(() => _selectedPageIndex = 2),
+            ),
+            const SizedBox(height: 4),
+            _NavRailItem(
+              label: 'Stats',
+              icon: Icons.insert_chart_outlined,
+              theme: t,
+              active: _selectedPageIndex == 3,
+              onTap: () => setState(() => _selectedPageIndex = 3),
             ),
             const Spacer(),
             _NavRailItem(
               label: 'Settings',
               icon: Icons.settings_outlined,
               theme: t,
-              active: _selectedPageIndex == 3,
-              onTap: () => setState(() => _selectedPageIndex = 3),
+              active: _selectedPageIndex == 4,
+              onTap: () => setState(() => _selectedPageIndex = 4),
             ),
             const SizedBox(height: 6),
         ],
@@ -489,7 +499,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _onKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
-    if (_selectedPageIndex != 1) return;
+    if (_selectedPageIndex != 2) return;
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       _stepForward();
     } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
@@ -599,7 +609,7 @@ class _ChartScreenState extends State<ChartScreen> {
             onSecondaryTap: _cycleTimezoneQuick,
             child: _toolbarButton(
               label: _displayTimezone.shortLabel,
-              onTap: () => setState(() => _selectedPageIndex = 3),
+              onTap: () => setState(() => _selectedPageIndex = 4),
               tooltip: 'Display Timezone (click to configure in Settings)',
             ),
           ),
