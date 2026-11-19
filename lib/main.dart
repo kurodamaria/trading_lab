@@ -283,11 +283,67 @@ class _ChartScreenState extends State<ChartScreen> {
   void _stepForward({int steps = 1}) {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return;
+    final int beforeCount = engine.closedTrades.length;
     setState(() {
       engine.stepForward(_replayCadence, steps: steps);
       _refreshVisibleCandles();
     });
+    _notifySameStepStopOuts(engine, beforeCount);
     _scheduleSessionSave();
+  }
+
+  /// Surfaces pending orders that filled and immediately hit their stop-loss
+  /// within a single replay step, so the vanishing pending line is explained.
+  void _notifySameStepStopOuts(ReplayEngine engine, int beforeCount) {
+    final List<CompletedTrade> trades = engine.closedTrades;
+    if (trades.length <= beforeCount) return;
+    for (int i = beforeCount; i < trades.length; i++) {
+      final CompletedTrade t = trades[i];
+      final bool sameBar = t.entryTime == t.exitTime;
+      final bool fromPending = t.entryType != EntryType.market;
+      if (t.exitReason == ExitReason.stopLoss && (sameBar || fromPending)) {
+        _showBanner(
+          'Pending order filled @ ${t.entryPrice.toStringAsFixed(2)} '
+          'and hit SL @ ${t.exitPrice.toStringAsFixed(2)}',
+        );
+      }
+    }
+  }
+
+  void _showBanner(String message) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Volatility-scaled default stop distance: `max(2 * ATR(14), 0.15%)` using
+  /// the trailing candles of the visible series.
+  double _defaultStopDistance(double referencePrice) {
+    final List<Candle> candles = _visibleBase1mCandles;
+    double atr = 0.0;
+    if (candles.length >= 2) {
+      final int end = candles.length - 1;
+      final int start = max(1, candles.length - 14);
+      double sum = 0.0;
+      int n = 0;
+      for (int i = start; i <= end; i++) {
+        final Candle c = candles[i];
+        final double prevClose = candles[i - 1].close;
+        final double tr = max(
+          c.high - c.low,
+          max((c.high - prevClose).abs(), (c.low - prevClose).abs()),
+        );
+        sum += tr;
+        n++;
+      }
+      if (n > 0) atr = sum / n;
+    }
+    final double atrDist = atr > 0 ? atr * 2.0 : 0.0;
+    final double minDist = referencePrice.abs() * 0.0015;
+    return max(atrDist, minDist);
   }
 
   void _stepBack() {
@@ -318,10 +374,11 @@ class _ChartScreenState extends State<ChartScreen> {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return;
     final double close = engine.currentBar.close;
+    final double dist = _defaultStopDistance(close);
     setState(() {
       engine.executeMarketOrder(
         side: side,
-        stopLoss: side == OrderSide.buy ? close - 3.0 : close + 3.0,
+        stopLoss: side == OrderSide.buy ? close - dist : close + dist,
       );
     });
     _scheduleSessionSave();
@@ -330,11 +387,12 @@ class _ChartScreenState extends State<ChartScreen> {
   void _placePending(OrderSide side, double price) {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return;
+    final double dist = _defaultStopDistance(price);
     setState(() {
       engine.placePendingOrder(
         side: side,
         price: price,
-        stopLoss: side == OrderSide.buy ? price - 3.0 : price + 3.0,
+        stopLoss: side == OrderSide.buy ? price - dist : price + dist,
       );
       _pendingPlacementSide = null;
     });

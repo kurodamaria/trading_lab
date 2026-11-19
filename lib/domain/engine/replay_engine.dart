@@ -500,7 +500,10 @@ class ReplayEngine {
     _pendingOrders.removeAt(filledIndex);
     _cancelAllPending(reason: CancelReason.manualCancel);
 
-    // Evaluate whether the SL triggers on this same bar after the fill.
+    // Intra-bar order guarantee: the pending order fills first (logging a
+    // `filled` event), then — if the same bar's low/high breaches the stop-loss
+    // — the trade is closed at the SL with `ExitReason.stopLoss` and recorded
+    // in `closedTrades`. It is never silently dropped.
     final double? sl = position.currentSl;
     if (sl != null) {
       final bool hit =

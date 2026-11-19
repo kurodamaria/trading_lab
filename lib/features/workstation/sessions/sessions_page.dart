@@ -817,14 +817,12 @@ class _SessionCardState extends State<_SessionCard> {
     final bool selected = widget.isSelected;
     final bool active = widget.active;
 
-    // Selected (canvas focus) uses primary ink; active-but-unselected keeps the
-    // terracotta accent; when both, the accent moves to an ACTIVE header tag.
+    // Border + shadow are reserved strictly for canvas selection; the active
+    // Practice session is indicated by the terracotta ACTIVE badge instead.
     final Color borderColor = selected
         ? t.textPrimary
-        : (active
-            ? t.activePillBackground
-            : (_hovered ? t.textSecondary : t.border));
-    final double borderWidth = (selected || active) ? 2.0 : 1.0;
+        : (_hovered ? t.textSecondary : t.border);
+    final double borderWidth = selected ? 2.0 : 1.0;
     final Color surface = selected
         ? Color.alphaBlend(
             t.activePillBackground.withValues(alpha: 0.06),
@@ -878,7 +876,7 @@ class _SessionCardState extends State<_SessionCard> {
                         ),
                       ),
                       const SizedBox(width: 6),
-                      if (active && selected) ...[
+                      if (active) ...[
                         _activeTag(t),
                         const SizedBox(width: 6),
                       ],
