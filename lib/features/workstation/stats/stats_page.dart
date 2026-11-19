@@ -7,6 +7,7 @@ import '../../../domain/engine/replay_engine.dart';
 import '../../../domain/engine/telemetry_calculator.dart';
 import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/order.dart';
+import '../../../domain/models/trading_session.dart';
 
 /// Editorial Newsprint-styled telemetry dashboard for a replay session.
 class StatsPage extends StatelessWidget {
@@ -14,6 +15,8 @@ class StatsPage extends StatelessWidget {
   final ChartTheme theme;
   final VoidCallback onCopyCsv;
   final DisplayTimezone displayTimezone;
+  final TradingSession? activeSession;
+  final TradingSession? parentSession;
 
   const StatsPage({
     super.key,
@@ -21,6 +24,8 @@ class StatsPage extends StatelessWidget {
     required this.theme,
     required this.onCopyCsv,
     this.displayTimezone = DisplayTimezone.utc,
+    this.activeSession,
+    this.parentSession,
   });
 
   @override
@@ -48,6 +53,10 @@ class StatsPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (activeSession != null) ...[
+                    _sessionHeader(t, trades),
+                    const SizedBox(height: 20),
+                  ],
                   _kpiGrid(t, stats),
                   const SizedBox(height: 20),
                   _sectionTitle(t, 'EQUITY CURVE'),
@@ -89,6 +98,291 @@ class StatsPage extends StatelessWidget {
         fontSize: 12,
         fontWeight: FontWeight.bold,
         letterSpacing: 1.0,
+      ),
+    );
+  }
+
+  Widget _sessionHeader(ChartTheme t, List<CompletedTrade> trades) {
+    final TradingSession s = activeSession!;
+    final int n = trades.length;
+    final double winPct =
+        n == 0 ? 0 : trades.where((x) => x.pnlPoints > 0).length / n * 100.0;
+    double net = 0;
+    for (final CompletedTrade tr in trades) {
+      net += tr.pnlPoints;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: t.axisBackground,
+        border: Border.all(color: t.border, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                color: t.badgeBackground,
+                child: Text(
+                  s.changeType.badge,
+                  style: TextStyle(
+                    color: t.badgeText,
+                    fontFamily: t.fontFamily,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  s.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: t.textPrimary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              _sampleBadge(t, n),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            s.hypothesis.isEmpty ? 'No hypothesis recorded.' : s.hypothesis,
+            style: TextStyle(
+              color: t.textSecondary,
+              fontFamily: t.fontFamily,
+              fontSize: 12,
+              height: 1.35,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+          if (parentSession != null) ...[
+            const SizedBox(height: 14),
+            _baselineStrip(t, n, winPct, net),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _sampleBadge(ChartTheme t, int n) {
+    final bool low = n < 30;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: low ? t.pendingSellBackground : t.gridLine,
+        border: Border.all(
+          color: low ? t.pendingSellBackground : t.border,
+          width: 1,
+        ),
+      ),
+      child: Text(
+        low ? 'Low Sample · N = $n' : 'N = $n trades',
+        style: TextStyle(
+          color: low ? t.pendingSellText : t.textPrimary,
+          fontFamily: t.fontFamily,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+
+  Widget _baselineStrip(
+    ChartTheme t,
+    int curTrades,
+    double curWin,
+    double curNet,
+  ) {
+    final TradingSession p = parentSession!;
+    final int pTrades = p.tradeCount;
+    final double passThrough =
+        pTrades == 0 ? 0.0 : (curTrades / pTrades) * 100.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: t.background,
+        border: Border.all(color: t.border, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.gridLine, width: 1)),
+            ),
+            child: Text(
+              'BASELINE vs FORK',
+              style: TextStyle(
+                color: t.textSecondary,
+                fontFamily: t.fontFamily,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _baselinePanel(
+                  t,
+                  title: 'PARENT',
+                  subtitle: p.changeType.badge,
+                  trades: pTrades,
+                  winPct: p.winRate * 100.0,
+                  net: p.netPnlPoints,
+                ),
+              ),
+              Container(width: 1, color: t.border),
+              Expanded(
+                child: _baselinePanel(
+                  t,
+                  title: 'CURRENT FORK',
+                  subtitle: activeSession!.changeType.badge,
+                  trades: curTrades,
+                  winPct: curWin,
+                  net: curNet,
+                  highlight: true,
+                ),
+              ),
+            ],
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: t.gridLine, width: 1)),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'Filter pass-through',
+                  style: TextStyle(
+                    color: t.textSecondary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 10,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  pTrades == 0
+                      ? '—'
+                      : '${passThrough.toStringAsFixed(0)}% '
+                          '($curTrades / $pTrades)',
+                  style: TextStyle(
+                    color: t.textPrimary,
+                    fontFamily: t.fontFamily,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _baselinePanel(
+    ChartTheme t, {
+    required String title,
+    required String subtitle,
+    required int trades,
+    required double winPct,
+    required double net,
+    bool highlight = false,
+  }) {
+    final Color netColor =
+        net >= 0 ? t.pendingBuyBackground : t.pendingSellBackground;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      color: highlight
+          ? t.activePillBackground.withValues(alpha: 0.08)
+          : Colors.transparent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: t.textPrimary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: t.textSecondary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 9,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _baselineMetric(t, 'Trades', '$trades'),
+          _baselineMetric(t, 'Win', '${winPct.toStringAsFixed(0)}%'),
+          _baselineMetric(
+            t,
+            'Net PnL',
+            '${net >= 0 ? '+' : ''}${net.toStringAsFixed(1)}',
+            color: netColor,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _baselineMetric(
+    ChartTheme t,
+    String label,
+    String value, {
+    Color? color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 60,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: t.textSecondary,
+                fontFamily: t.fontFamily,
+                fontSize: 10,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: color ?? t.textPrimary,
+              fontFamily: t.fontFamily,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }

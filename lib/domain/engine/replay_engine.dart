@@ -28,6 +28,67 @@ class ReplayEngine {
     }
   }
 
+  /// Rebuilds an engine from a persisted session snapshot: a candle slice,
+  /// cursor position, and any captured open position, pending orders, and
+  /// closed trades.
+  factory ReplayEngine.restore({
+    required List<Candle> base1mCandles,
+    required int initialCursorIndex,
+    int? maxCursorIndex,
+    OpenPosition? openPosition,
+    List<PendingOrder>? pendingOrders,
+    List<CompletedTrade>? closedTrades,
+    bool isCompleted = false,
+  }) {
+    final ReplayEngine engine = ReplayEngine(
+      base1mCandles: base1mCandles,
+      initialCursorIndex: initialCursorIndex,
+      maxCursorIndex: maxCursorIndex,
+    );
+    engine._openPosition = openPosition;
+    engine._pendingOrders.addAll(pendingOrders ?? const <PendingOrder>[]);
+    engine._closedTrades.addAll(closedTrades ?? const <CompletedTrade>[]);
+    engine._isCompleted = isCompleted;
+
+    // Advance the id / event counters past any restored identifiers so new
+    // orders and events never collide with persisted ones.
+    final List<String> ids = <String>[
+      if (openPosition != null) openPosition.id,
+      for (final PendingOrder o in engine._pendingOrders) o.id,
+      for (final CompletedTrade t in engine._closedTrades) t.id,
+    ];
+    engine._orderIdCounter = _maxIdSuffix(ids) + 1;
+
+    int maxSeq = -1;
+    void scan(Iterable<OrderEvent> events) {
+      for (final OrderEvent e in events) {
+        if (e.seq > maxSeq) maxSeq = e.seq;
+      }
+    }
+
+    if (openPosition != null) scan(openPosition.events);
+    for (final PendingOrder o in engine._pendingOrders) {
+      scan(o.events);
+    }
+    for (final CompletedTrade t in engine._closedTrades) {
+      scan(t.events);
+    }
+    engine._eventSeq = maxSeq + 1;
+
+    return engine;
+  }
+
+  static int _maxIdSuffix(List<String> ids) {
+    int max = -1;
+    for (final String id in ids) {
+      final int dash = id.lastIndexOf('-');
+      if (dash < 0 || dash + 1 >= id.length) continue;
+      final int? v = int.tryParse(id.substring(dash + 1));
+      if (v != null && v > max) max = v;
+    }
+    return max;
+  }
+
   final List<Candle> _candles;
   final int _minCursorIndex;
   final int _maxCursorIndex;
@@ -78,18 +139,43 @@ class ReplayEngine {
     }
 
     if (_cursorIndex >= _maxCursorIndex && !_isCompleted) {
-      if (_openPosition != null) {
-        _closeAt(
-          exitPrice: currentBar.close,
-          exitTime: currentBar.time,
-          reason: ExitReason.windowEnd,
-        );
-      }
-      _cancelAllPending(note: 'Window end');
-      _isCompleted = true;
+      _finalizeAtEnd();
     }
 
     return _cursorIndex - oldCursor;
+  }
+
+  /// Fast-forwards toward [targetTime], stopping [leadBars] bars before the
+  /// first bar at/after it so the caller can react in real time. Pending orders
+  /// and stop-losses are evaluated for every skipped bar. Returns `true` if the
+  /// cursor actually advanced.
+  bool jumpToTime(DateTime targetTime, {int leadBars = 2}) {
+    if (_isCompleted) return false;
+
+    int targetIndex = _maxCursorIndex;
+    for (int i = _cursorIndex; i <= _maxCursorIndex; i++) {
+      if (!_candles[i].time.isBefore(targetTime)) {
+        targetIndex = i;
+        break;
+      }
+    }
+
+    int target = targetIndex - leadBars;
+    final int minTarget = _cursorIndex + 1;
+    if (target < minTarget) target = minTarget;
+    if (target > _maxCursorIndex) target = _maxCursorIndex;
+    if (target <= _cursorIndex) return false;
+
+    while (_cursorIndex < target) {
+      final int next = _cursorIndex + 1;
+      _processBar(_candles[next], next);
+      _cursorIndex = next;
+      if (_isCompleted) break;
+    }
+    if (_cursorIndex >= _maxCursorIndex && !_isCompleted) {
+      _finalizeAtEnd();
+    }
+    return true;
   }
 
   bool canStepBack(Timeframe cadence, {int steps = 1}) {
@@ -319,6 +405,20 @@ class ReplayEngine {
       );
     }
     _pendingOrders.clear();
+  }
+
+  /// Closes any open position at the window's final close and cancels leftover
+  /// pending orders, marking the replay complete.
+  void _finalizeAtEnd() {
+    if (_openPosition != null) {
+      _closeAt(
+        exitPrice: currentBar.close,
+        exitTime: currentBar.time,
+        reason: ExitReason.windowEnd,
+      );
+    }
+    _cancelAllPending(note: 'Window end');
+    _isCompleted = true;
   }
 
   void _processBar(Candle bar, int index) {
