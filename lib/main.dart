@@ -61,6 +61,8 @@ class _ChartScreenState extends State<ChartScreen> {
   OrderSide? _pendingPlacementSide;
 
   final FocusNode _keyboardFocusNode = FocusNode();
+  final GlobalKey<SessionsPageState> _sessionsKey =
+      GlobalKey<SessionsPageState>();
 
   int _selectedPageIndex = 1;
 
@@ -68,6 +70,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _sessionSaveTimer?.cancel();
     _keyboardFocusNode.dispose();
     super.dispose();
@@ -88,6 +91,7 @@ class _ChartScreenState extends State<ChartScreen> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _initDatasetStore();
     _sessionStore = SessionStore(
       Directory(
@@ -661,57 +665,55 @@ class _ChartScreenState extends State<ChartScreen> {
           );
 
     final Widget content = Focus(
+      focusNode: _keyboardFocusNode,
       autofocus: true,
-      child: KeyboardListener(
-        focusNode: _keyboardFocusNode,
-        onKeyEvent: _onKeyEvent,
-        child: Row(
-          children: [
-            _navRail(t),
-            Expanded(
-              child: IndexedStack(
-                index: _selectedPageIndex,
-                children: [
-                  DatasetsPage(
-                    store: _candleStore ??
-                        BinaryCandleStore(Directory.systemTemp),
-                    theme: t,
-                    displayTimezone: _displayTimezone,
-                  ),
-                  SessionsPage(
-                    store: _sessionStore,
-                    candleStore: _candleStore ??
-                        BinaryCandleStore(Directory.systemTemp),
-                    activeSessionId: _activeSessionId,
-                    onOpenSession: _openSession,
-                    onActiveSessionClosed: _closeActiveSession,
-                    theme: t,
-                  ),
-                  practice,
-                  StatsPage(
-                    replayEngine: _replayEngine,
-                    theme: t,
-                    onCopyCsv: _copyCsv,
-                    displayTimezone: _displayTimezone,
-                    activeSession: _activeSession,
-                    parentSession: _parentSession,
-                    onOpenSessions: () =>
-                        setState(() => _selectedPageIndex = 1),
-                    onResumeLatest: _latestResumableSession == null
-                        ? null
-                        : _resumeLatestSession,
-                    latestSessionName: _latestResumableSession?.name,
-                  ),
-                  SettingsPage(
-                    theme: t,
-                    selected: _displayTimezone,
-                    onChanged: (tz) => setState(() => _displayTimezone = tz),
-                  ),
-                ],
-              ),
+      child: Row(
+        children: [
+          _navRail(t),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedPageIndex,
+              children: [
+                DatasetsPage(
+                  store: _candleStore ??
+                      BinaryCandleStore(Directory.systemTemp),
+                  theme: t,
+                  displayTimezone: _displayTimezone,
+                ),
+                SessionsPage(
+                  key: _sessionsKey,
+                  store: _sessionStore,
+                  candleStore: _candleStore ??
+                      BinaryCandleStore(Directory.systemTemp),
+                  activeSessionId: _activeSessionId,
+                  onOpenSession: _openSession,
+                  onActiveSessionClosed: _closeActiveSession,
+                  theme: t,
+                ),
+                practice,
+                StatsPage(
+                  replayEngine: _replayEngine,
+                  theme: t,
+                  onCopyCsv: _copyCsv,
+                  displayTimezone: _displayTimezone,
+                  activeSession: _activeSession,
+                  parentSession: _parentSession,
+                  onOpenSessions: () =>
+                      setState(() => _selectedPageIndex = 1),
+                  onResumeLatest: _latestResumableSession == null
+                      ? null
+                      : _resumeLatestSession,
+                  latestSessionName: _latestResumableSession?.name,
+                ),
+                SettingsPage(
+                  theme: t,
+                  selected: _displayTimezone,
+                  onChanged: (tz) => setState(() => _displayTimezone = tz),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
 
@@ -774,6 +776,40 @@ class _ChartScreenState extends State<ChartScreen> {
         ],
       ),
     );
+  }
+
+  /// Global hardware-key handler: routes the Maya/Blender "zoom to focus"
+  /// shortcut regardless of widget focus, and falls back to the chart hotkeys.
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (event.logicalKey == LogicalKeyboardKey.period ||
+        event.logicalKey == LogicalKeyboardKey.numpadDecimal ||
+        event.physicalKey == PhysicalKeyboardKey.period ||
+        event.logicalKey == LogicalKeyboardKey.keyF ||
+        event.physicalKey == PhysicalKeyboardKey.keyF) {
+      return _maybeZoomToFocus();
+    }
+    _onKeyEvent(event);
+    return false;
+  }
+
+  /// Maya/Blender-style "zoom to focus" — only when the Sessions tab is
+  /// visible, no dialog is open, and no text field holds focus. Returns `true`
+  /// when the shortcut was consumed.
+  bool _maybeZoomToFocus() {
+    if (!mounted) return false;
+    if (_selectedPageIndex != 1) return false;
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    final BuildContext? focusContext =
+        FocusManager.instance.primaryFocus?.context;
+    if (focusContext != null &&
+        (focusContext.widget is EditableText ||
+            focusContext.findAncestorWidgetOfExactType<EditableText>() !=
+                null)) {
+      return false;
+    }
+    _sessionsKey.currentState?.focusSelectedOrAll();
+    return true;
   }
 
   void _onKeyEvent(KeyEvent event) {

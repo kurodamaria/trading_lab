@@ -30,15 +30,17 @@ class SessionsPage extends StatefulWidget {
   });
 
   @override
-  State<SessionsPage> createState() => _SessionsPageState();
+  State<SessionsPage> createState() => SessionsPageState();
 }
 
-class _SessionsPageState extends State<SessionsPage> {
+class SessionsPageState extends State<SessionsPage>
+    with SingleTickerProviderStateMixin {
   static const double _cardWidth = SessionStore.cardWidth;
   static const double _cardHeight = SessionStore.cardHeight;
   static const double _minZoom = 0.35;
   static const double _maxZoom = 1.8;
   static const double _worldExtent = 100000.0;
+  static const double _dockReserve = 72.0;
 
   List<TradingSession> _sessions = <TradingSession>[];
   bool _loading = true;
@@ -47,6 +49,13 @@ class _SessionsPageState extends State<SessionsPage> {
   double _zoom = 1.0;
   Size _viewportSize = Size.zero;
   bool _didInitialFrame = false;
+
+  // Camera tween.
+  late final AnimationController _cameraController;
+  Offset _camFromPan = Offset.zero;
+  Offset _camToPan = Offset.zero;
+  double _camFromZoom = 1.0;
+  double _camToZoom = 1.0;
 
   // Arena-free pointer bookkeeping (mirrors ChartPaneWidget discipline).
   final Map<int, Offset> _pointers = <int, Offset>{};
@@ -69,7 +78,36 @@ class _SessionsPageState extends State<SessionsPage> {
   void initState() {
     super.initState();
     _selectedSessionId = widget.activeSessionId;
+    _cameraController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    )..addListener(_onCameraTick);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _cameraController.dispose();
+    super.dispose();
+  }
+
+  void _onCameraTick() {
+    final double t = Curves.easeOutCubic.transform(_cameraController.value);
+    setState(() {
+      _zoom = _camFromZoom + (_camToZoom - _camFromZoom) * t;
+      _panOffset = Offset.lerp(_camFromPan, _camToPan, t) ?? _camToPan;
+    });
+  }
+
+  void _animateCameraTo(Offset targetPan, double targetZoom) {
+    _camFromPan = _panOffset;
+    _camFromZoom = _zoom;
+    _camToPan = targetPan;
+    _camToZoom = targetZoom.clamp(_minZoom, _maxZoom);
+    _cameraController
+      ..stop()
+      ..reset()
+      ..forward();
   }
 
   @override
@@ -126,6 +164,7 @@ class _SessionsPageState extends State<SessionsPage> {
   // ---------------------------------------------------------------------------
 
   void _onPointerDown(PointerDownEvent e) {
+    _cameraController.stop();
     _pointers[e.pointer] = e.localPosition;
     if (_pointers.length == 1) {
       final bool secondary = e.buttons == kSecondaryMouseButton;
@@ -210,6 +249,7 @@ class _SessionsPageState extends State<SessionsPage> {
 
   void _onPointerSignal(PointerSignalEvent e) {
     if (e is PointerScrollEvent) {
+      _cameraController.stop();
       final double factor = math.exp(-e.scrollDelta.dy * 0.0015);
       _applyZoom(_zoom * factor, e.localPosition);
     }
@@ -411,6 +451,80 @@ class _SessionsPageState extends State<SessionsPage> {
   }
 
   // ---------------------------------------------------------------------------
+  // Maya / Blender-style "Zoom to Focus" (`.` / numpad `.`)
+  // ---------------------------------------------------------------------------
+
+  /// Zooms to the selected node (or frames all nodes when nothing is selected)
+  /// with a smooth camera tween.
+  void focusSelectedOrAll() {
+    final String? sel = _selectedSessionId;
+    if (sel != null) {
+      final TradingSession? s = _sessionById(sel);
+      if (s != null) {
+        _focusSession(s.id);
+        return;
+      }
+    }
+    _focusAll();
+  }
+
+  void _focusSession(String id) {
+    final TradingSession? s = _sessionById(id);
+    if (s == null) return;
+    final double targetZoom = _zoom < 1.0 ? 1.05 : _zoom.clamp(1.0, 1.35);
+    _animateCameraTo(_panForCardCenter(s, targetZoom), targetZoom);
+  }
+
+  Offset _panForCardCenter(TradingSession s, double zoom) {
+    final double cx = s.canvasX + _cardWidth / 2;
+    final double cy = s.canvasY + _cardHeight / 2;
+    final double vw = _viewportSize.width;
+    final double vh = math.max(0.0, _viewportSize.height - _dockReserve);
+    return Offset(vw / 2 - cx * zoom, vh / 2 - cy * zoom);
+  }
+
+  void _focusAll() {
+    if (_sessions.isEmpty) {
+      _animateCameraTo(Offset.zero, 1.0);
+      return;
+    }
+
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = -double.infinity;
+    double maxY = -double.infinity;
+    for (final TradingSession s in _sessions) {
+      minX = math.min(minX, s.canvasX);
+      minY = math.min(minY, s.canvasY);
+      maxX = math.max(maxX, s.canvasX + _cardWidth);
+      maxY = math.max(maxY, s.canvasY + _cardHeight);
+    }
+
+    final double vw = _viewportSize.width;
+    final double vh = math.max(0.0, _viewportSize.height - _dockReserve);
+    final double bboxW = math.max(1.0, maxX - minX);
+    final double bboxH = math.max(1.0, maxY - minY);
+    const double margin = 64.0;
+
+    double zoom = 1.0;
+    final double fitX = (vw - margin) / bboxW;
+    final double fitY = (vh - margin) / bboxH;
+    zoom = math.min(1.0, math.min(fitX, fitY));
+    zoom = zoom.clamp(0.45, 1.0);
+
+    final double cx = minX + bboxW / 2;
+    final double cy = minY + bboxH / 2;
+    double panX = vw / 2 - cx * zoom;
+    double panY = vh / 2 - cy * zoom;
+
+    // Keep the top-left root card at least 36px from the top/left edges.
+    panX = math.max(panX, 36.0 - minX * zoom);
+    panY = math.max(panY, 36.0 - minY * zoom);
+
+    _animateCameraTo(Offset(panX, panY), zoom);
+  }
+
+  // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
 
@@ -545,6 +659,7 @@ class _SessionsPageState extends State<SessionsPage> {
           onOpen: () => widget.onOpenSession(s),
           onFork: s.isCompleted ? () => _forkSession(s) : null,
           onDelete: () => _deleteSession(s),
+          onFocus: () => _focusSession(s.id),
         ),
       ),
     );
@@ -673,6 +788,7 @@ class _SessionCard extends StatefulWidget {
   final VoidCallback onOpen;
   final VoidCallback? onFork;
   final VoidCallback onDelete;
+  final VoidCallback onFocus;
 
   const _SessionCard({
     required this.session,
@@ -683,6 +799,7 @@ class _SessionCard extends StatefulWidget {
     required this.onOpen,
     required this.onFork,
     required this.onDelete,
+    required this.onFocus,
   });
 
   @override
@@ -737,40 +854,50 @@ class _SessionCardState extends State<_SessionCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    s.name,
-                    maxLines: 1,
-                    softWrap: false,
+            // Header/body (outside the footer buttons) double-clicks to focus.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTap: widget.onFocus,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          s.name,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: t.textPrimary,
+                            fontFamily: t.fontFamily,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      if (active && selected) ...[
+                        _activeTag(t),
+                        const SizedBox(width: 6),
+                      ],
+                      _tagPill(t, s.changeType),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    s.hypothesis.isNotEmpty ? s.hypothesis : s.datasetLabel,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: t.textPrimary,
+                      color: t.textSecondary,
                       fontFamily: t.fontFamily,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 10,
+                      height: 1.25,
                     ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                if (active && selected) ...[
-                  _activeTag(t),
-                  const SizedBox(width: 6),
                 ],
-                _tagPill(t, s.changeType),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              s.hypothesis.isNotEmpty ? s.hypothesis : s.datasetLabel,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: t.textSecondary,
-                fontFamily: t.fontFamily,
-                fontSize: 10,
-                height: 1.25,
               ),
             ),
             const Spacer(),
