@@ -38,6 +38,7 @@ class _SessionsPageState extends State<SessionsPage> {
   static const double _cardHeight = SessionStore.cardHeight;
   static const double _minZoom = 0.35;
   static const double _maxZoom = 1.8;
+  static const double _worldExtent = 100000.0;
 
   List<TradingSession> _sessions = <TradingSession>[];
   bool _loading = true;
@@ -363,56 +364,73 @@ class _SessionsPageState extends State<SessionsPage> {
   Widget build(BuildContext context) {
     final ChartTheme t = widget.theme;
 
-    return Container(
-      color: t.background,
-      child: Listener(
-        behavior: HitTestBehavior.opaque,
-        onPointerDown: _onPointerDown,
-        onPointerMove: _onPointerMove,
-        onPointerUp: _onPointerUp,
-        onPointerCancel: _onPointerUp,
-        onPointerSignal: _onPointerSignal,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.grab,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: RepaintBoundary(
-                  child: CustomPaint(
-                    painter: _SessionCanvasPainter(
-                      sessions: _sessions,
-                      panOffset: _panOffset,
-                      zoom: _zoom,
-                      theme: t,
-                      activeSessionId: widget.activeSessionId,
-                      draggingId: _draggingId,
+    return ClipRect(
+      child: Container(
+        color: t.background,
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerUp,
+          onPointerSignal: _onPointerSignal,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.grab,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _SessionCanvasPainter(
+                        sessions: _sessions,
+                        panOffset: _panOffset,
+                        zoom: _zoom,
+                        theme: t,
+                        activeSessionId: widget.activeSessionId,
+                        draggingId: _draggingId,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              // World-space layer: cards are always laid out at their fixed
-              // 248x148 size and the whole layer is pan/zoom transformed, so
-              // card-internal layout never scales with `_zoom`.
-              Positioned.fill(
-                child: Transform(
-                  transform: Matrix4.identity()
-                    ..translateByDouble(
-                      _panOffset.dx,
-                      _panOffset.dy,
-                      0.0,
-                      1.0,
-                    )
-                    ..scaleByDouble(_zoom, _zoom, 1.0, 1.0),
-                  transformHitTests: true,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: _cardWidgets(),
+                // World-space layer: cards are always laid out at their fixed
+                // 248x148 size and the whole layer is pan/zoom transformed, so
+                // card-internal layout never scales with `_zoom`. The oversized
+                // `OverflowBox` canvas means distant cards stay renderable while
+                // the page-level `ClipRect` / `Clip.hardEdge` Stack still clip
+                // everything to the canvas viewport (never over the nav rail).
+                Positioned.fill(
+                  child: Transform(
+                    transform: Matrix4.identity()
+                      ..translateByDouble(
+                        _panOffset.dx,
+                        _panOffset.dy,
+                        0.0,
+                        1.0,
+                      )
+                      ..scaleByDouble(_zoom, _zoom, 1.0, 1.0),
+                    transformHitTests: true,
+                    child: OverflowBox(
+                      alignment: Alignment.topLeft,
+                      minWidth: 0.0,
+                      maxWidth: double.infinity,
+                      minHeight: 0.0,
+                      maxHeight: double.infinity,
+                      child: SizedBox(
+                        width: _worldExtent,
+                        height: _worldExtent,
+                        child: Stack(
+                          clipBehavior: Clip.hardEdge,
+                          children: _cardWidgets(),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              if (!_loading && _sessions.isEmpty) _emptyHint(t),
-              Positioned(left: 12, top: 12, child: _overlayBar(t)),
-            ],
+                if (!_loading && _sessions.isEmpty) _emptyHint(t),
+                Positioned(left: 12, top: 12, child: _overlayBar(t)),
+              ],
+            ),
           ),
         ),
       ),
