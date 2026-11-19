@@ -16,6 +16,7 @@ class SessionsPage extends StatefulWidget {
   final BinaryCandleStore candleStore;
   final String? activeSessionId;
   final ValueChanged<TradingSession> onOpenSession;
+  final VoidCallback? onActiveSessionClosed;
   final ChartTheme theme;
 
   const SessionsPage({
@@ -24,6 +25,7 @@ class SessionsPage extends StatefulWidget {
     required this.candleStore,
     required this.activeSessionId,
     required this.onOpenSession,
+    this.onActiveSessionClosed,
     required this.theme,
   });
 
@@ -333,6 +335,9 @@ class _SessionsPageState extends State<SessionsPage> {
       () => _sessions =
           _sessions.where((s) => s.id != session.id).toList(),
     );
+    if (widget.activeSessionId == session.id) {
+      widget.onActiveSessionClosed?.call();
+    }
   }
 
   Future<void> _autoLayout() async {

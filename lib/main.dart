@@ -45,15 +45,16 @@ class _ChartScreenState extends State<ChartScreen> {
 
   static const ChartTheme _theme = ChartTheme.nytNewsprint;
 
-  late List<Candle> _base1mCandles;
-  late ReplayEngine _replayEngine;
-  late List<Candle> _visibleBase1mCandles;
+  List<Candle>? _base1mCandles;
+  ReplayEngine? _replayEngine;
+  List<Candle> _visibleBase1mCandles = const <Candle>[];
 
   BinaryCandleStore? _candleStore;
   late SessionStore _sessionStore;
   String? _activeSessionId;
   TradingSession? _activeSession;
   TradingSession? _parentSession;
+  TradingSession? _latestResumableSession;
   Timer? _sessionSaveTimer;
 
   Timeframe _replayCadence = Timeframe.m15;
@@ -61,7 +62,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   final FocusNode _keyboardFocusNode = FocusNode();
 
-  int _selectedPageIndex = 2;
+  int _selectedPageIndex = 1;
 
   DisplayTimezone _displayTimezone = DisplayTimezone.utcPlus8;
 
@@ -87,21 +88,12 @@ class _ChartScreenState extends State<ChartScreen> {
   @override
   void initState() {
     super.initState();
-    _base1mCandles = _generateBase1mCandles(30000);
-
-    _replayEngine = ReplayEngine(
-      base1mCandles: _base1mCandles,
-      initialCursorIndex: 25000,
-      maxCursorIndex: 29999,
-    );
-
     _initDatasetStore();
     _sessionStore = SessionStore(
       Directory(
         '${Directory.systemTemp.path}${Platform.pathSeparator}trading_lab_sessions',
       ),
     );
-    _refreshVisibleCandles();
 
     final Size viewSize =
         WidgetsBinding.instance.platformDispatcher.views.first.physicalSize;
@@ -117,6 +109,12 @@ class _ChartScreenState extends State<ChartScreen> {
       first: const PaneNode(id: 'pane-left', timeframe: Timeframe.m15),
       second: const PaneNode(id: 'pane-right', timeframe: Timeframe.h1),
     );
+  }
+
+  /// Lazily materializes the synthetic dataset only when a session references
+  /// it, so the app no longer boots a 30,000-bar sandbox.
+  List<Candle> _syntheticCandles() {
+    return _base1mCandles ??= _generateBase1mCandles(30000);
   }
 
   List<Candle> _generateBase1mCandles(int count) {
@@ -279,23 +277,30 @@ class _ChartScreenState extends State<ChartScreen> {
   ];
 
   void _stepForward({int steps = 1}) {
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
     setState(() {
-      _replayEngine.stepForward(_replayCadence, steps: steps);
+      engine.stepForward(_replayCadence, steps: steps);
       _refreshVisibleCandles();
     });
     _scheduleSessionSave();
   }
 
   void _stepBack() {
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
     setState(() {
-      _replayEngine.stepBack(_replayCadence);
+      engine.stepBack(_replayCadence);
       _refreshVisibleCandles();
     });
     _scheduleSessionSave();
   }
 
   void _refreshVisibleCandles() {
-    _visibleBase1mCandles = _replayEngine.visibleBase1mCandles.toList();
+    final ReplayEngine? engine = _replayEngine;
+    _visibleBase1mCandles = engine == null
+        ? const <Candle>[]
+        : engine.visibleBase1mCandles.toList();
   }
 
   void _cycleCadence() {
@@ -306,9 +311,11 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   void _marketEntry(OrderSide side) {
-    final double close = _replayEngine.currentBar.close;
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    final double close = engine.currentBar.close;
     setState(() {
-      _replayEngine.executeMarketOrder(
+      engine.executeMarketOrder(
         side: side,
         stopLoss: side == OrderSide.buy ? close - 3.0 : close + 3.0,
       );
@@ -317,8 +324,10 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   void _placePending(OrderSide side, double price) {
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
     setState(() {
-      _replayEngine.placePendingOrder(
+      engine.placePendingOrder(
         side: side,
         price: price,
         stopLoss: side == OrderSide.buy ? price - 3.0 : price + 3.0,
@@ -329,29 +338,39 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   void _closePosition() {
-    setState(() => _replayEngine.closePositionManually());
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    setState(() => engine.closePositionManually());
     _scheduleSessionSave();
   }
 
   void _removeStopLoss() {
-    setState(() => _replayEngine.removeStopLoss());
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    setState(() => engine.removeStopLoss());
     _scheduleSessionSave();
   }
 
   void _updateSl(double price) {
-    setState(() => _replayEngine.updateStopLoss(price));
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    setState(() => engine.updateStopLoss(price));
     _scheduleSessionSave();
   }
 
   void _updatePendingPrice(String orderId, double price) {
-    setState(() => _replayEngine.updatePendingOrderPrice(orderId, price));
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    setState(() => engine.updatePendingOrderPrice(orderId, price));
     _scheduleSessionSave();
   }
 
   void _copyCsv() {
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
     Clipboard.setData(
       ClipboardData(
-        text: TelemetryCalculator.exportTradesCsv(_replayEngine.closedTrades),
+        text: TelemetryCalculator.exportTradesCsv(engine.closedTrades),
       ),
     );
     ScaffoldMessenger.of(context).showSnackBar(
@@ -371,26 +390,84 @@ class _ChartScreenState extends State<ChartScreen> {
       final Directory sessionsDir = Directory(
         '${support.path}${Platform.pathSeparator}sessions',
       );
+      final BinaryCandleStore candleStore = BinaryCandleStore(dir);
+      final SessionStore sessionStore = SessionStore(sessionsDir);
+      final List<TradingSession> sessions = await sessionStore.loadAll();
+      final String? lastId = await sessionStore.loadLastActiveSessionId();
+
+      TradingSession? matched;
+      if (lastId != null) {
+        for (final TradingSession s in sessions) {
+          if (s.id == lastId) {
+            matched = s;
+            break;
+          }
+        }
+      }
+
       if (!mounted) return;
       setState(() {
-        _candleStore = BinaryCandleStore(dir);
-        _sessionStore = SessionStore(sessionsDir);
+        _candleStore = candleStore;
+        _sessionStore = sessionStore;
+        _latestResumableSession = _mostRecent(sessions);
+        if (sessions.isEmpty) _selectedPageIndex = 1;
       });
+
+      if (matched != null) {
+        await _openSession(matched, switchToPractice: false);
+      }
     } catch (_) {
       // Keep the synthetic fallback if the platform dir is unavailable.
     }
   }
 
-  Future<void> _openSession(TradingSession session) async {
+  TradingSession? _mostRecent(List<TradingSession> sessions) {
+    TradingSession? best;
+    for (final TradingSession s in sessions) {
+      if (best == null || s.updatedAt.isAfter(best.updatedAt)) {
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  void _resumeLatestSession() {
+    final TradingSession? session = _latestResumableSession;
+    if (session == null) return;
+    _openSession(session);
+  }
+
+  void _closeActiveSession() {
+    if (_activeSession == null && _replayEngine == null) return;
+    setState(() {
+      _activeSession = null;
+      _parentSession = null;
+      _activeSessionId = null;
+      _replayEngine = null;
+      _visibleBase1mCandles = const <Candle>[];
+      _paths.clear();
+      _activePath = null;
+      _selectedPathId = null;
+      _selectedPointIndex = null;
+      _isDrawingPath = false;
+      _pendingPlacementSide = null;
+    });
+    _sessionStore.saveLastActiveSessionId(null);
+  }
+
+  Future<void> _openSession(
+    TradingSession session, {
+    bool switchToPractice = true,
+  }) async {
     final int start = session.windowStartIndex;
 
     late List<Candle> slice;
     late int originIndex;
     if (session.datasetId == 'synthetic' || _candleStore == null) {
-      originIndex = start.clamp(0, _base1mCandles.length - 1);
-      final int end =
-          session.windowEndIndex.clamp(originIndex, _base1mCandles.length - 1);
-      slice = _base1mCandles.sublist(originIndex, end + 1);
+      final List<Candle> base = _syntheticCandles();
+      originIndex = start.clamp(0, base.length - 1);
+      final int end = session.windowEndIndex.clamp(originIndex, base.length - 1);
+      slice = base.sublist(originIndex, end + 1);
     } else {
       try {
         final int s0 = start < 0 ? 0 : start;
@@ -400,14 +477,14 @@ class _ChartScreenState extends State<ChartScreen> {
           count: (session.windowEndIndex - s0 + 1).clamp(1, 1 << 30),
         );
         if (raw.isEmpty) {
-          slice = _base1mCandles;
+          slice = _syntheticCandles();
           originIndex = 0;
         } else {
           slice = raw;
           originIndex = s0;
         }
       } catch (_) {
-        slice = _base1mCandles;
+        slice = _syntheticCandles();
         originIndex = 0;
       }
     }
@@ -446,6 +523,7 @@ class _ChartScreenState extends State<ChartScreen> {
       _activeSession = session;
       _parentSession = parent;
       _activeSessionId = session.id;
+      _latestResumableSession = session;
       _replayCadence = session.initialCadence;
       _paths
         ..clear()
@@ -457,8 +535,9 @@ class _ChartScreenState extends State<ChartScreen> {
       _isDrawingPath = false;
       _pendingPlacementSide = null;
       _refreshVisibleCandles();
-      _selectedPageIndex = 2;
+      if (switchToPractice) _selectedPageIndex = 2;
     });
+    _sessionStore.saveLastActiveSessionId(session.id);
     _scheduleSessionSave();
   }
 
@@ -476,17 +555,19 @@ class _ChartScreenState extends State<ChartScreen> {
 
   Future<void> _persistActiveSession() async {
     final TradingSession? session = _activeSession;
-    if (session == null) return;
+    final ReplayEngine? engine = _replayEngine;
+    if (session == null || engine == null) return;
     final TradingSession updated = session.copyWith(
-      cursorIndex: _replayEngine.cursorIndex,
-      isCompleted: _replayEngine.isCompleted,
-      closedTrades: List<CompletedTrade>.from(_replayEngine.closedTrades),
-      openPosition: _replayEngine.openPosition,
-      pendingOrders: List<PendingOrder>.from(_replayEngine.pendingOrders),
+      cursorIndex: engine.cursorIndex,
+      isCompleted: engine.isCompleted,
+      closedTrades: List<CompletedTrade>.from(engine.closedTrades),
+      openPosition: engine.openPosition,
+      pendingOrders: List<PendingOrder>.from(engine.pendingOrders),
       paths: List<CrossTimeframePath>.from(_paths),
       updatedAt: DateTime.now(),
     );
     _activeSession = updated;
+    _latestResumableSession = updated;
     await _sessionStore.upsert(updated);
   }
 
@@ -495,8 +576,9 @@ class _ChartScreenState extends State<ChartScreen> {
   // --------------------------------------------------------------------------
   int _nextEntryIndex() {
     final TradingSession? session = _activeSession;
-    if (session == null) return -1;
-    final DateTime now = _replayEngine.currentBar.time;
+    final ReplayEngine? engine = _replayEngine;
+    if (session == null || engine == null) return -1;
+    final DateTime now = engine.currentBar.time;
     final List<CandidateEntry> entries = session.candidateEntries;
     for (int i = 0; i < entries.length; i++) {
       if (entries[i].entryTime.isAfter(now)) return i;
@@ -506,10 +588,11 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _jumpToNextEntry() {
     final TradingSession? session = _activeSession;
+    final ReplayEngine? engine = _replayEngine;
     final int idx = _nextEntryIndex();
-    if (session == null || idx < 0) return;
+    if (session == null || engine == null || idx < 0) return;
     final bool advanced =
-        _replayEngine.jumpToTime(session.candidateEntries[idx].entryTime);
+        engine.jumpToTime(session.candidateEntries[idx].entryTime);
     if (!advanced) return;
     setState(_refreshVisibleCandles);
     _scheduleSessionSave();
@@ -518,51 +601,62 @@ class _ChartScreenState extends State<ChartScreen> {
   @override
   Widget build(BuildContext context) {
     final t = _theme;
+    final ReplayEngine? engine = _replayEngine;
+    final bool hasSession = _activeSession != null && engine != null;
 
-    final Widget workstation = Column(
-      children: [
-        _buildTopToolbar(),
-        Expanded(
-          child: TilingTreeView(
-            node: _rootNode,
-            base1mCandles: _visibleBase1mCandles,
+    final Widget practice = hasSession
+        ? Column(
+            children: [
+              _buildTopToolbar(),
+              Expanded(
+                child: TilingTreeView(
+                  node: _rootNode,
+                  base1mCandles: _visibleBase1mCandles,
+                  theme: t,
+                  isDrawingPath: _isDrawingPath,
+                  paths: _paths,
+                  activePath: _activePath,
+                  syncedCursorRange: _syncedCursorRange,
+                  canClose: _rootNode is SplitNode,
+                  onTreeChanged: _onTreeChanged,
+                  onHoverRangeChanged: (range) =>
+                      setState(() => _syncedCursorRange = range),
+                  onAddPathPoint: _addPathPoint,
+                  onFinishPath: _finishActivePath,
+                  openPosition: engine.openPosition,
+                  pendingOrders: engine.pendingOrders,
+                  closedTrades: engine.closedTrades,
+                  pendingPlacementSide: _pendingPlacementSide,
+                  onPlacePendingOrder: _placePending,
+                  onUpdateSl: _updateSl,
+                  onUpdatePendingPrice: _updatePendingPrice,
+                  onCancelPendingOrder: (orderId) {
+                    setState(() => engine.cancelPendingOrder(orderId));
+                    _scheduleSessionSave();
+                  },
+                  selectedPathId: _selectedPathId,
+                  selectedPointIndex: _selectedPointIndex,
+                  onSelectPath: (pathId, pointIndex) => setState(() {
+                    _selectedPathId = pathId;
+                    _selectedPointIndex = pointIndex;
+                  }),
+                  onUpdatePathPoint: _updatePathPoint,
+                  onFocusRequested: _keyboardFocusNode.requestFocus,
+                  onClosePosition: _closePosition,
+                  onRemoveSl: _removeStopLoss,
+                  displayTimezone: _displayTimezone,
+                ),
+              ),
+            ],
+          )
+        : NoActiveSessionView(
             theme: t,
-            isDrawingPath: _isDrawingPath,
-            paths: _paths,
-            activePath: _activePath,
-            syncedCursorRange: _syncedCursorRange,
-            canClose: _rootNode is SplitNode,
-            onTreeChanged: _onTreeChanged,
-            onHoverRangeChanged: (range) =>
-                setState(() => _syncedCursorRange = range),
-            onAddPathPoint: _addPathPoint,
-            onFinishPath: _finishActivePath,
-            openPosition: _replayEngine.openPosition,
-            pendingOrders: _replayEngine.pendingOrders,
-            closedTrades: _replayEngine.closedTrades,
-            pendingPlacementSide: _pendingPlacementSide,
-            onPlacePendingOrder: _placePending,
-            onUpdateSl: _updateSl,
-            onUpdatePendingPrice: _updatePendingPrice,
-            onCancelPendingOrder: (orderId) {
-              setState(() => _replayEngine.cancelPendingOrder(orderId));
-              _scheduleSessionSave();
-            },
-            selectedPathId: _selectedPathId,
-            selectedPointIndex: _selectedPointIndex,
-            onSelectPath: (pathId, pointIndex) => setState(() {
-              _selectedPathId = pathId;
-              _selectedPointIndex = pointIndex;
-            }),
-            onUpdatePathPoint: _updatePathPoint,
-            onFocusRequested: _keyboardFocusNode.requestFocus,
-            onClosePosition: _closePosition,
-            onRemoveSl: _removeStopLoss,
-            displayTimezone: _displayTimezone,
-          ),
-        ),
-      ],
-    );
+            onOpenSessions: () => setState(() => _selectedPageIndex = 1),
+            onResumeLatest: _latestResumableSession == null
+                ? null
+                : _resumeLatestSession,
+            latestSessionName: _latestResumableSession?.name,
+          );
 
     final Widget content = Focus(
       autofocus: true,
@@ -588,9 +682,10 @@ class _ChartScreenState extends State<ChartScreen> {
                         BinaryCandleStore(Directory.systemTemp),
                     activeSessionId: _activeSessionId,
                     onOpenSession: _openSession,
+                    onActiveSessionClosed: _closeActiveSession,
                     theme: t,
                   ),
-                  workstation,
+                  practice,
                   StatsPage(
                     replayEngine: _replayEngine,
                     theme: t,
@@ -598,6 +693,12 @@ class _ChartScreenState extends State<ChartScreen> {
                     displayTimezone: _displayTimezone,
                     activeSession: _activeSession,
                     parentSession: _parentSession,
+                    onOpenSessions: () =>
+                        setState(() => _selectedPageIndex = 1),
+                    onResumeLatest: _latestResumableSession == null
+                        ? null
+                        : _resumeLatestSession,
+                    latestSessionName: _latestResumableSession?.name,
                   ),
                   SettingsPage(
                     theme: t,
@@ -675,6 +776,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _onKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
+    if (_activeSession == null || _replayEngine == null) return;
     if (_selectedPageIndex != 2) return;
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       _stepForward();
@@ -707,6 +809,8 @@ class _ChartScreenState extends State<ChartScreen> {
 
   Widget _buildTopToolbar() {
     final t = _theme;
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return const SizedBox.shrink();
     final int nextEntry = _nextEntryIndex();
     return Container(
       height: 38,
@@ -761,8 +865,8 @@ class _ChartScreenState extends State<ChartScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '${_replayEngine.cursorIndex - _replayEngine.minCursorIndex}'
-                    '/${_replayEngine.maxCursorIndex - _replayEngine.minCursorIndex}',
+                    '${engine.cursorIndex - engine.minCursorIndex}'
+                    '/${engine.maxCursorIndex - engine.minCursorIndex}',
                     style: TextStyle(
                       color: t.textSecondary,
                       fontSize: 11,
@@ -871,9 +975,11 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   List<Widget> _buildExecutionCluster(ChartTheme t) {
-    final OpenPosition? pos = _replayEngine.openPosition;
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return const <Widget>[];
+    final OpenPosition? pos = engine.openPosition;
     if (pos != null) {
-      final double close = _replayEngine.currentBar.close;
+      final double close = engine.currentBar.close;
       final double pnl = pos.side == OrderSide.buy
           ? close - pos.entryPrice
           : pos.entryPrice - close;
@@ -902,7 +1008,7 @@ class _ChartScreenState extends State<ChartScreen> {
       ];
     }
 
-    if (_replayEngine.isCompleted) {
+    if (engine.isCompleted) {
       return [
         Text(
           'Session complete',

@@ -11,29 +11,45 @@ import '../../../domain/models/trading_session.dart';
 
 /// Editorial Newsprint-styled telemetry dashboard for a replay session.
 class StatsPage extends StatelessWidget {
-  final ReplayEngine replayEngine;
+  final ReplayEngine? replayEngine;
   final ChartTheme theme;
   final VoidCallback onCopyCsv;
   final DisplayTimezone displayTimezone;
   final TradingSession? activeSession;
   final TradingSession? parentSession;
+  final VoidCallback onOpenSessions;
+  final VoidCallback? onResumeLatest;
+  final String? latestSessionName;
 
   const StatsPage({
     super.key,
     required this.replayEngine,
     required this.theme,
     required this.onCopyCsv,
+    required this.onOpenSessions,
     this.displayTimezone = DisplayTimezone.utc,
     this.activeSession,
     this.parentSession,
+    this.onResumeLatest,
+    this.latestSessionName,
   });
 
   @override
   Widget build(BuildContext context) {
     final ChartTheme t = theme;
-    final SessionTelemetry stats = TelemetryCalculator.calculate(replayEngine);
+    final ReplayEngine? engine = replayEngine;
+    if (activeSession == null || engine == null) {
+      return NoActiveSessionView(
+        theme: t,
+        onOpenSessions: onOpenSessions,
+        onResumeLatest: onResumeLatest,
+        latestSessionName: latestSessionName,
+      );
+    }
+
+    final SessionTelemetry stats = TelemetryCalculator.calculate(engine);
     final List<CompletedTrade> trades =
-        List<CompletedTrade>.from(replayEngine.closedTrades);
+        List<CompletedTrade>.from(engine.closedTrades);
 
     return Container(
       color: t.background,
@@ -548,6 +564,121 @@ class StatsPage extends StatelessWidget {
           fontFamily: t.fontFamily,
           fontSize: 12,
           fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
+  }
+}
+
+/// Reusable launchpad shown by Practice and Stats when no session is loaded.
+/// Newsprint-styled and overflow-safe at any width.
+class NoActiveSessionView extends StatelessWidget {
+  final ChartTheme theme;
+  final VoidCallback onOpenSessions;
+  final VoidCallback? onResumeLatest;
+  final String? latestSessionName;
+
+  const NoActiveSessionView({
+    super.key,
+    required this.theme,
+    required this.onOpenSessions,
+    this.onResumeLatest,
+    this.latestSessionName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ChartTheme t = theme;
+    final String? name = latestSessionName;
+    return Container(
+      color: t.background,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: t.axisBackground,
+            border: Border.all(color: t.border, width: 1),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'NO ACTIVE SESSION',
+                style: TextStyle(
+                  color: t.textPrimary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Select an existing experiment node or create a new Root '
+                'session on the canvas to start replay and track telemetry.',
+                style: TextStyle(
+                  color: t.textSecondary,
+                  fontFamily: t.fontFamily,
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _launchButton(
+                    t,
+                    'Open Sessions',
+                    onTap: onOpenSessions,
+                    primary: true,
+                  ),
+                  if (onResumeLatest != null)
+                    _launchButton(
+                      t,
+                      name == null || name.isEmpty
+                          ? 'Resume last session'
+                          : 'Resume "$name"',
+                      onTap: onResumeLatest,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _launchButton(
+    ChartTheme t,
+    String label, {
+    required VoidCallback? onTap,
+    bool primary = false,
+  }) {
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: primary ? t.activePillText : t.textPrimary,
+        backgroundColor: primary ? t.activePillBackground : t.background,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        side: primary
+            ? BorderSide.none
+            : BorderSide(color: t.border, width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontFamily: t.fontFamily,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
         ),
       ),
     );

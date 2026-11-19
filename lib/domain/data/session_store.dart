@@ -11,6 +11,7 @@ import '../models/trading_session.dart';
 /// simply yields an empty list.
 class SessionStore {
   static const String fileName = 'sessions.json';
+  static const String activeSessionFileName = 'active_session.txt';
 
   static const double cardWidth = 248.0;
   static const double cardHeight = 148.0;
@@ -25,6 +26,33 @@ class SessionStore {
 
   File get _file =>
       File('${storageDir.path}${Platform.pathSeparator}$fileName');
+
+  File get _activeFile =>
+      File('${storageDir.path}${Platform.pathSeparator}$activeSessionFileName');
+
+  /// Reads the id of the last session the user had open, or `null` when none
+  /// was recorded.
+  Future<String?> loadLastActiveSessionId() async {
+    final File f = _activeFile;
+    if (!await f.exists()) return null;
+    final String raw = await f.readAsString();
+    final String trimmed = raw.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  /// Persists [sessionId] as the resumable session, or clears the marker when
+  /// [sessionId] is `null`/empty.
+  Future<void> saveLastActiveSessionId(String? sessionId) async {
+    final File f = _activeFile;
+    if (sessionId == null || sessionId.isEmpty) {
+      if (await f.exists()) await f.delete();
+      return;
+    }
+    if (!await storageDir.exists()) {
+      await storageDir.create(recursive: true);
+    }
+    await f.writeAsString(sessionId);
+  }
 
   Future<List<TradingSession>> loadAll() async {
     final File f = _file;
@@ -87,6 +115,8 @@ class SessionStore {
     all.removeWhere((s) => s.id == sessionId);
     if (all.length == before) return;
     await saveAll(all);
+    final String? last = await loadLastActiveSessionId();
+    if (last == sessionId) await saveLastActiveSessionId(null);
   }
 
   /// Deterministically arranges root trees side-by-side and nests forks

@@ -15,7 +15,8 @@ void main() {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const MaterialApp(home: ChartScreen()));
 
-    // The chart toolbar should be present.
-    expect(find.text('K-LINE ENGINE'), findsOneWidget);
+    // With no persisted sessions the app opens on the Sessions canvas, whose
+    // launchpad is always present.
+    expect(find.text('+ New Root Session'), findsOneWidget);
   });
 }
