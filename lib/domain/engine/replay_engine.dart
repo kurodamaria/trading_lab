@@ -199,12 +199,21 @@ class ReplayEngine {
   }
 
   /// Human-readable reason that stepping back one [cadence] bar is blocked, or
-  /// `null` when it is allowed. Mirrors [canStepBack] (single step).
+  /// `null` when it is allowed. Mirrors [canStepBack] (single step) but
+  /// classifies the specific execution boundary responsible.
   String? stepBackBlockReason(Timeframe cadence) {
     if (canStepBack(cadence)) return null;
-    if (_cursorIndex <= _minCursorIndex) return 'At session start';
-    return 'Step-back locked at last trade/order boundary '
-        '(prevents look-ahead bias)';
+    if (_openPosition != null) {
+      return 'Cannot step back past open position entry (anti-look-ahead)';
+    }
+    if (_pendingOrders.isNotEmpty) {
+      return 'Cannot step back past active pending order (anti-look-ahead)';
+    }
+    if (_closedTrades.isNotEmpty || _canceledOrders.isNotEmpty) {
+      return 'Cannot step back past closed trade / order history '
+          '(anti-look-ahead)';
+    }
+    return 'At session start';
   }
 
   bool stepBack(Timeframe cadence, {int steps = 1}) {
