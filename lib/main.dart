@@ -349,6 +349,20 @@ class _ChartScreenState extends State<ChartScreen> {
   void _stepBack() {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return;
+    final String? reason = engine.stepBackBlockReason(_replayCadence);
+    if (reason != null) {
+      final ScaffoldMessengerState? messenger =
+          ScaffoldMessenger.maybeOf(context);
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(reason),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      return;
+    }
     setState(() {
       engine.stepBack(_replayCadence);
       _refreshVisibleCandles();
@@ -916,6 +930,7 @@ class _ChartScreenState extends State<ChartScreen> {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return const SizedBox.shrink();
     final int nextEntry = _nextEntryIndex();
+    final String? backBlockReason = engine.stepBackBlockReason(_replayCadence);
     return Container(
       height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -953,7 +968,8 @@ class _ChartScreenState extends State<ChartScreen> {
                   _toolbarButton(
                     label: '◀',
                     onTap: _stepBack,
-                    tooltip: 'Step Back 1 Bar (←)',
+                    enabled: backBlockReason == null,
+                    tooltip: backBlockReason ?? 'Step Back 1 Bar (←)',
                   ),
                   const SizedBox(width: 6),
                   _toolbarButton(
@@ -1164,6 +1180,7 @@ class _ChartScreenState extends State<ChartScreen> {
     required String label,
     required VoidCallback onTap,
     bool highlighted = false,
+    bool enabled = true,
     String? tooltip,
   }) {
     return _ToolbarButton(
@@ -1171,6 +1188,7 @@ class _ChartScreenState extends State<ChartScreen> {
       onTap: onTap,
       theme: _theme,
       highlighted: highlighted,
+      enabled: enabled,
       tooltip: tooltip,
     );
   }
@@ -1181,6 +1199,7 @@ class _ToolbarButton extends StatefulWidget {
   final VoidCallback onTap;
   final ChartTheme theme;
   final bool highlighted;
+  final bool enabled;
   final String? tooltip;
 
   const _ToolbarButton({
@@ -1188,6 +1207,7 @@ class _ToolbarButton extends StatefulWidget {
     required this.onTap,
     required this.theme,
     required this.highlighted,
+    this.enabled = true,
     this.tooltip,
   });
 
@@ -1202,18 +1222,25 @@ class _ToolbarButtonState extends State<_ToolbarButton> {
   Widget build(BuildContext context) {
     final ChartTheme t = widget.theme;
     final bool highlighted = widget.highlighted;
+    final bool enabled = widget.enabled;
+    final bool hoverActive = _isHovered && enabled;
 
     final Color fill;
     final Color border;
     final Color textColor;
     final FontWeight weight;
 
-    if (highlighted) {
+    if (!enabled) {
+      fill = t.background;
+      border = t.gridLine;
+      textColor = t.textSecondary.withValues(alpha: 0.45);
+      weight = FontWeight.normal;
+    } else if (highlighted) {
       fill = t.activePillBackground;
       border = t.activePillBackground;
       textColor = t.activePillText;
       weight = FontWeight.bold;
-    } else if (_isHovered) {
+    } else if (hoverActive) {
       fill = t.activePillBackground.withValues(alpha: 0.14);
       border = t.activePillBackground.withValues(alpha: 0.55);
       textColor = t.textPrimary;
@@ -1226,9 +1253,14 @@ class _ToolbarButtonState extends State<_ToolbarButton> {
     }
 
     final Widget button = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      cursor:
+          enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) {
+        if (enabled) setState(() => _isHovered = true);
+      },
+      onExit: (_) {
+        if (_isHovered) setState(() => _isHovered = false);
+      },
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(

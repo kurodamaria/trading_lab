@@ -198,6 +198,15 @@ class ReplayEngine {
     return true;
   }
 
+  /// Human-readable reason that stepping back one [cadence] bar is blocked, or
+  /// `null` when it is allowed. Mirrors [canStepBack] (single step).
+  String? stepBackBlockReason(Timeframe cadence) {
+    if (canStepBack(cadence)) return null;
+    if (_cursorIndex <= _minCursorIndex) return 'At session start';
+    return 'Step-back locked at last trade/order boundary '
+        '(prevents look-ahead bias)';
+  }
+
   bool stepBack(Timeframe cadence, {int steps = 1}) {
     if (!canStepBack(cadence, steps: steps)) return false;
     _cursorIndex -= steps * cadence.minutes;
