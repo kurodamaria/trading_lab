@@ -277,6 +277,12 @@ class ReplayEngine {
     final int idx = _pendingOrders.indexWhere((o) => o.id == orderId);
     if (idx == -1) return;
     final PendingOrder order = _pendingOrders[idx];
+    // Never let the entry drag across its paired stop-loss.
+    final double? sl = order.stopLoss;
+    if (sl != null) {
+      if (order.side == OrderSide.buy && newPrice <= sl) return;
+      if (order.side == OrderSide.sell && newPrice >= sl) return;
+    }
     final PendingOrderType type = _resolveType(order.side, newPrice);
     _pendingOrders[idx] = PendingOrder(
       id: order.id,
@@ -290,6 +296,35 @@ class ReplayEngine {
         _evt(currentTime, OrderEventType.priceModified,
             price: newPrice, note: type.name),
       ],
+    );
+  }
+
+  /// Sets or moves a pending order's paired stop-loss, enforcing that it stays
+  /// on the risk side of the entry (below for buys, above for sells).
+  void updatePendingOrderStopLoss(String orderId, double newSl) {
+    final int idx = _pendingOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    final PendingOrder order = _pendingOrders[idx];
+    if (order.side == OrderSide.buy && newSl >= order.entryPrice) return;
+    if (order.side == OrderSide.sell && newSl <= order.entryPrice) return;
+    _pendingOrders[idx] = order.copyWith(
+      stopLoss: newSl,
+      events: [
+        ...order.events,
+        _evt(currentTime, OrderEventType.slModified, price: newSl),
+      ],
+    );
+  }
+
+  /// Removes a pending order's paired stop-loss.
+  void removePendingOrderStopLoss(String orderId) {
+    final int idx = _pendingOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    final PendingOrder order = _pendingOrders[idx];
+    if (order.stopLoss == null) return;
+    _pendingOrders[idx] = order.copyWith(
+      clearStopLoss: true,
+      events: [...order.events, _evt(currentTime, OrderEventType.slRemoved)],
     );
   }
 

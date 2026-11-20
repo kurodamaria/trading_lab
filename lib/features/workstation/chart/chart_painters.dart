@@ -480,7 +480,21 @@ class MainChartPainter extends CustomPainter {
       );
     }
 
-    for (final order in pendingOrders) {
+    // Paired risk bracket from the live entry to its stop-loss.
+    if (pos != null && pos.currentSl != null) {
+      final double yEntry = viewport.priceToY(pos.entryPrice, size.height);
+      final double ySl = viewport.priceToY(pos.currentSl!, size.height);
+      _drawVerticalBracket(
+        canvas,
+        16.0,
+        yEntry,
+        ySl,
+        theme.bearBorder.withValues(alpha: 0.75),
+      );
+    }
+
+    for (int orderIndex = 0; orderIndex < pendingOrders.length; orderIndex++) {
+      final PendingOrder order = pendingOrders[orderIndex];
       final Color lineAndBg = order.side == OrderSide.buy
           ? theme.pendingBuyBackground
           : theme.pendingSellBackground;
@@ -505,6 +519,34 @@ class MainChartPainter extends CustomPainter {
         fill: lineAndBg,
         textColor: orderTextColor,
       );
+
+      final double? pendingSl = order.stopLoss;
+      if (pendingSl != null) {
+        final double ySl = viewport.priceToY(pendingSl, size.height);
+        final Color slColor = theme.bearBorder.withValues(alpha: 0.7);
+        _drawDashedLine(
+          canvas,
+          Offset(0, ySl),
+          Offset(size.width, ySl),
+          Paint()
+            ..color = slColor
+            ..strokeWidth = 1.2,
+        );
+        _drawTag(
+          canvas,
+          Offset(22, ySl),
+          'Pending SL (${(order.entryPrice - pendingSl).abs().toStringAsFixed(1)})',
+          theme.bearBorder,
+          theme.pendingSellText,
+        );
+        _drawVerticalBracket(
+          canvas,
+          16.0 + orderIndex * 10.0,
+          y,
+          ySl,
+          slColor,
+        );
+      }
     }
 
     // Entry marker for the live position.
@@ -736,6 +778,50 @@ class MainChartPainter extends CustomPainter {
       );
       current += dash + gap;
     }
+  }
+
+  /// Vertical dashed bracket with 3px end ticks connecting two price levels.
+  void _drawVerticalBracket(
+    Canvas canvas,
+    double x,
+    double yA,
+    double yB,
+    Color color,
+  ) {
+    final Paint paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2;
+    _drawDashedLine(canvas, Offset(x, yA), Offset(x, yB), paint);
+    canvas.drawLine(Offset(x - 3, yA), Offset(x + 3, yA), paint);
+    canvas.drawLine(Offset(x - 3, yB), Offset(x + 3, yB), paint);
+  }
+
+  void _drawTag(
+    Canvas canvas,
+    Offset anchor,
+    String text,
+    Color bg,
+    Color fg,
+  ) {
+    final TextPainter tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: fg,
+          fontSize: 10,
+          fontFamily: theme.fontFamily,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final Rect r = Rect.fromLTWH(
+      anchor.dx,
+      anchor.dy - tp.height / 2 - 2,
+      tp.width + 8,
+      tp.height + 4,
+    );
+    canvas.drawRect(r, Paint()..color = bg);
+    tp.paint(canvas, Offset(anchor.dx + 4, anchor.dy - tp.height / 2));
   }
 
   @override

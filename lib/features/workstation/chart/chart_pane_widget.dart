@@ -38,6 +38,7 @@ class ChartPaneWidget extends StatefulWidget {
   final void Function(OrderSide side, double price)? onPlacePendingOrder;
   final ValueChanged<double>? onUpdateSl;
   final void Function(String orderId, double newPrice)? onUpdatePendingPrice;
+  final void Function(String orderId, double newPrice)? onUpdatePendingSl;
   final ValueChanged<String>? onCancelPendingOrder;
   final String? selectedPathId;
   final int? selectedPointIndex;
@@ -72,6 +73,7 @@ class ChartPaneWidget extends StatefulWidget {
     this.onPlacePendingOrder,
     this.onUpdateSl,
     this.onUpdatePendingPrice,
+    this.onUpdatePendingSl,
     this.onCancelPendingOrder,
     this.selectedPathId,
     this.selectedPointIndex,
@@ -100,6 +102,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   bool _isPanningChart = false;
   bool _isDraggingPriceAxis = false;
   bool _isDraggingTimeAxis = false;
+  bool _hoveringDraggableLine = false;
 
   Size _chartSize = Size.zero;
 
@@ -319,6 +322,15 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
           return;
         }
       }
+      for (final order in widget.pendingOrders) {
+        final double? orderSl = order.stopLoss;
+        if (orderSl != null &&
+            (_viewport.priceToY(orderSl, _chartSize.height) - y).abs() <=
+                lineTol) {
+          setState(() => _draggingLineId = 'PSL:${order.id}');
+          return;
+        }
+      }
 
       // Path selection / dot dragging.
       final double dotTol = _tol(event.kind, 9.0, 22.0);
@@ -411,6 +423,31 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   double _tol(PointerDeviceKind kind, double mouse, double touch) =>
       kind == PointerDeviceKind.touch ? touch : mouse;
 
+  /// True when [dy] is within the drag tolerance of any draggable order line
+  /// (live SL, pending entry, pending SL).
+  bool _isOverDraggableLine(double dy) {
+    if (_chartSize.height <= 0) return false;
+    const double lineTol = 8.0;
+    final double? sl = widget.openPosition?.currentSl;
+    if (sl != null &&
+        (_viewport.priceToY(sl, _chartSize.height) - dy).abs() <= lineTol) {
+      return true;
+    }
+    for (final order in widget.pendingOrders) {
+      if ((_viewport.priceToY(order.entryPrice, _chartSize.height) - dy).abs() <=
+          lineTol) {
+        return true;
+      }
+      final double? orderSl = order.stopLoss;
+      if (orderSl != null &&
+          (_viewport.priceToY(orderSl, _chartSize.height) - dy).abs() <=
+              lineTol) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Offset get _pointerMidpoint {
     final Iterable<Offset> values = _pointers.values;
     if (values.isEmpty) return Offset.zero;
@@ -489,10 +526,13 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
     if (_draggingLineId != null) {
       final double price =
           _viewport.yToPrice(event.localPosition.dy, _chartSize.height);
-      if (_draggingLineId == 'SL') {
+      final String lineId = _draggingLineId!;
+      if (lineId == 'SL') {
         widget.onUpdateSl?.call(price);
+      } else if (lineId.startsWith('PSL:')) {
+        widget.onUpdatePendingSl?.call(lineId.substring(4), price);
       } else {
-        widget.onUpdatePendingPrice?.call(_draggingLineId!, price);
+        widget.onUpdatePendingPrice?.call(lineId, price);
       }
       setState(() {});
       return;
@@ -789,13 +829,24 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                     ? SystemMouseCursors.precise
                                     : _isPanningChart
                                         ? SystemMouseCursors.grabbing
-                                        : SystemMouseCursors.precise,
+                                        : _hoveringDraggableLine
+                                            ? SystemMouseCursors.resizeUpDown
+                                            : SystemMouseCursors.precise,
                                 onHover: (e) {
-                                  setState(() => _cursorPos = e.localPosition);
+                                  final bool over = _isOverDraggableLine(
+                                    e.localPosition.dy,
+                                  );
+                                  setState(() {
+                                    _cursorPos = e.localPosition;
+                                    _hoveringDraggableLine = over;
+                                  });
                                   _reportHoverTime();
                                 },
                                 onExit: (_) {
-                                  setState(() => _cursorPos = null);
+                                  setState(() {
+                                    _cursorPos = null;
+                                    _hoveringDraggableLine = false;
+                                  });
                                   widget.onHoverRangeChanged(null);
                                 },
                                 child: ClipRect(

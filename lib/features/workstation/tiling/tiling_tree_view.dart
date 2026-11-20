@@ -32,6 +32,7 @@ class TilingTreeView extends StatelessWidget {
   final void Function(OrderSide side, double price)? onPlacePendingOrder;
   final ValueChanged<double>? onUpdateSl;
   final void Function(String orderId, double newPrice)? onUpdatePendingPrice;
+  final void Function(String orderId, double newPrice)? onUpdatePendingSl;
   final ValueChanged<String>? onCancelPendingOrder;
   final String? selectedPathId;
   final int? selectedPointIndex;
@@ -65,6 +66,7 @@ class TilingTreeView extends StatelessWidget {
     this.onPlacePendingOrder,
     this.onUpdateSl,
     this.onUpdatePendingPrice,
+    this.onUpdatePendingSl,
     this.onCancelPendingOrder,
     this.selectedPathId,
     this.selectedPointIndex,
@@ -105,6 +107,7 @@ class TilingTreeView extends StatelessWidget {
         onPlacePendingOrder: onPlacePendingOrder,
         onUpdateSl: onUpdateSl,
         onUpdatePendingPrice: onUpdatePendingPrice,
+        onUpdatePendingSl: onUpdatePendingSl,
         onCancelPendingOrder: onCancelPendingOrder,
         selectedPathId: selectedPathId,
         selectedPointIndex: selectedPointIndex,
@@ -148,6 +151,7 @@ class TilingTreeView extends StatelessWidget {
                 onPlacePendingOrder: onPlacePendingOrder,
                 onUpdateSl: onUpdateSl,
                 onUpdatePendingPrice: onUpdatePendingPrice,
+        onUpdatePendingSl: onUpdatePendingSl,
                 onCancelPendingOrder: onCancelPendingOrder,
                 selectedPathId: selectedPathId,
                 selectedPointIndex: selectedPointIndex,

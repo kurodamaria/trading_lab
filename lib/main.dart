@@ -427,6 +427,13 @@ class _ChartScreenState extends State<ChartScreen> {
     _scheduleSessionSave();
   }
 
+  void _updatePendingSl(String orderId, double price) {
+    final ReplayEngine? engine = _replayEngine;
+    if (engine == null) return;
+    setState(() => engine.updatePendingOrderStopLoss(orderId, price));
+    _scheduleSessionSave();
+  }
+
   void _copyCsv() {
     final ReplayEngine? engine = _replayEngine;
     if (engine == null) return;
@@ -694,6 +701,7 @@ class _ChartScreenState extends State<ChartScreen> {
                   onPlacePendingOrder: _placePending,
                   onUpdateSl: _updateSl,
                   onUpdatePendingPrice: _updatePendingPrice,
+                  onUpdatePendingSl: _updatePendingSl,
                   onCancelPendingOrder: (orderId) {
                     setState(() => engine.cancelPendingOrder(orderId));
                     _scheduleSessionSave();
