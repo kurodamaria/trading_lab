@@ -96,20 +96,10 @@ class StatsPage extends StatelessWidget {
                   const SizedBox(height: 20),
                   _sectionTitle(t, 'EQUITY CURVE'),
                   const SizedBox(height: 8),
-                  Container(
-                    height: 220,
-                    decoration: BoxDecoration(
-                      color: t.axisBackground,
-                      border: Border.all(color: t.border, width: 1),
-                    ),
-                    padding: const EdgeInsets.all(12),
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      painter: _EquityCurvePainter(
-                        trades: trades,
-                        theme: t,
-                      ),
-                    ),
+                  _EquityCurveChart(
+                    trades: trades,
+                    theme: t,
+                    displayTimezone: displayTimezone,
                   ),
                   const SizedBox(height: 20),
                   _sectionTitle(t, 'TRADE LEDGER'),
@@ -896,97 +886,430 @@ class _CopyCsvPillState extends State<_CopyCsvPill> {
   }
 }
 
-class _EquityCurvePainter extends CustomPainter {
+/// Interactive equity curve: Y-axis PnL rulers, X-axis trade ticks, running-peak
+/// drawdown shading, and a hover/scrub crosshair readout.
+class _EquityCurveChart extends StatefulWidget {
   final List<CompletedTrade> trades;
   final ChartTheme theme;
+  final DisplayTimezone displayTimezone;
 
-  _EquityCurvePainter({required this.trades, required this.theme});
+  const _EquityCurveChart({
+    required this.trades,
+    required this.theme,
+    required this.displayTimezone,
+  });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final ChartTheme t = theme;
+  State<_EquityCurveChart> createState() => _EquityCurveChartState();
+}
 
-    if (trades.isEmpty) {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: 'No closed trades yet',
+class _EquityCurveChartState extends State<_EquityCurveChart> {
+  static const double _left = 14;
+  static const double _right = 64;
+
+  int? _hoveredIndex;
+
+  void _updateHover(Offset local, Size size) {
+    if (widget.trades.isEmpty) return;
+    final int points = widget.trades.length + 1;
+    final double plotW = size.width - _left - _right;
+    if (plotW <= 0) return;
+    final double x = (local.dx - _left).clamp(0.0, plotW);
+    final int idx = points <= 1
+        ? 0
+        : (x / plotW * (points - 1)).round().clamp(0, points - 1).toInt();
+    if (idx != _hoveredIndex) setState(() => _hoveredIndex = idx);
+  }
+
+  void _clearHover() {
+    if (_hoveredIndex != null) setState(() => _hoveredIndex = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ChartTheme t = widget.theme;
+    final BoxDecoration deco = BoxDecoration(
+      color: t.axisBackground,
+      border: Border.all(color: t.border, width: 1),
+    );
+
+    if (widget.trades.isEmpty) {
+      return Container(
+        height: 240,
+        decoration: deco,
+        alignment: Alignment.center,
+        child: Text(
+          'No closed trades yet',
           style: TextStyle(
             color: t.textSecondary,
             fontFamily: t.fontFamily,
             fontSize: 13,
           ),
         ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(
-        canvas,
-        Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2),
       );
-      return;
     }
 
-    final List<double> series = <double>[0.0];
-    double cumulative = 0.0;
-    for (final trade in trades) {
-      cumulative += trade.pnlPoints;
-      series.add(cumulative);
+    return Container(
+      height: 240,
+      decoration: deco,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final Size size = constraints.biggest;
+          return MouseRegion(
+            onHover: (e) => _updateHover(e.localPosition, size),
+            onExit: (_) => _clearHover(),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (d) => _updateHover(d.localPosition, size),
+              onTapUp: (_) => _clearHover(),
+              onTapCancel: _clearHover,
+              onPanUpdate: (d) => _updateHover(d.localPosition, size),
+              onPanEnd: (_) => _clearHover(),
+              onPanCancel: _clearHover,
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: _EquityCurveChartPainter(
+                  trades: widget.trades,
+                  theme: t,
+                  displayTimezone: widget.displayTimezone,
+                  hoveredIndex: _hoveredIndex,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _EquityCurveChartPainter extends CustomPainter {
+  final List<CompletedTrade> trades;
+  final ChartTheme theme;
+  final DisplayTimezone displayTimezone;
+  final int? hoveredIndex;
+
+  _EquityCurveChartPainter({
+    required this.trades,
+    required this.theme,
+    required this.displayTimezone,
+    required this.hoveredIndex,
+  });
+
+  static const double _left = 14;
+  static const double _top = 14;
+  static const double _right = 64;
+  static const double _bottom = 24;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (trades.isEmpty) return;
+    final ChartTheme t = theme;
+
+    final double plotL = _left;
+    final double plotT = _top;
+    final double plotR = size.width - _right;
+    final double plotB = size.height - _bottom;
+    final double plotW = math.max(1.0, plotR - plotL);
+    final double plotH = math.max(1.0, plotB - plotT);
+
+    final int n = trades.length + 1;
+    final List<double> eq = List<double>.filled(n, 0.0);
+    double cum = 0.0;
+    for (int i = 1; i < n; i++) {
+      cum += trades[i - 1].pnlPoints;
+      eq[i] = cum;
     }
 
-    double minV = series.reduce(math.min);
-    double maxV = series.reduce(math.max);
+    final List<double> peak = List<double>.filled(n, 0.0);
+    double runPeak = 0.0;
+    for (int i = 0; i < n; i++) {
+      runPeak = math.max(runPeak, eq[i]);
+      peak[i] = runPeak;
+    }
+
+    double minV = 0.0;
+    double maxV = 0.0;
+    for (final double v in eq) {
+      minV = math.min(minV, v);
+      maxV = math.max(maxV, v);
+    }
     if (minV == maxV) {
       minV -= 1.0;
       maxV += 1.0;
     }
-    final double pad = (maxV - minV) * 0.1;
+    final double pad = (maxV - minV) * 0.08;
     minV -= pad;
     maxV += pad;
 
-    final double zeroY =
-        size.height - ((0.0 - minV) / (maxV - minV)) * size.height;
+    double xFor(int i) =>
+        plotL + (n <= 1 ? 0.0 : (i / (n - 1)) * plotW);
+    double yFor(double v) => plotT + (maxV - v) / (maxV - minV) * plotH;
 
+    // --- Y-axis rulers + gridlines ---
+    final double step = _niceStep((maxV - minV) / 4.0);
     final gridPaint = Paint()
       ..color = t.gridLine
       ..strokeWidth = 1.0;
-    for (int r = 1; r < 4; r++) {
-      final double y = size.height * (r / 4);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    final zeroPaint = Paint()
+      ..color = t.border
+      ..strokeWidth = 1.2;
+    final double firstTick = (minV / step).ceil() * step;
+    final int tickCount = math.max(1, ((maxV - firstTick) / step).round() + 1);
+    for (int i = 0; i < tickCount; i++) {
+      final double v = firstTick + i * step;
+      final double y = yFor(v);
+      if (y < plotT - 0.5 || y > plotB + 0.5) continue;
+      canvas.drawLine(
+        Offset(plotL, y),
+        Offset(plotR, y),
+        v.abs() < step * 0.001 ? zeroPaint : gridPaint,
+      );
+      _text(
+        canvas,
+        _fmtTick(v),
+        Offset(size.width - 6, y),
+        _axisStyle(t),
+        alignRight: true,
+      );
     }
-    canvas.drawLine(
-      Offset(0, zeroY),
-      Offset(size.width, zeroY),
-      Paint()
-        ..color = t.border.withValues(alpha: 0.5)
-        ..strokeWidth = 1.0,
+
+    // --- X-axis trade-index ticks ---
+    const int maxXTicks = 6;
+    final int stepIdx = math.max(1, ((n - 1) / (maxXTicks - 1)).ceil());
+    for (int i = 0; i < n; i += stepIdx) {
+      final double x = xFor(i);
+      canvas.drawLine(Offset(x, plotB), Offset(x, plotB + 4), gridPaint);
+      _text(
+        canvas,
+        '#$i',
+        Offset(x, plotB + 7),
+        _axisStyle(t),
+        centered: true,
+      );
+    }
+
+    // --- Drawdown shading (running-peak step line vs equity) ---
+    final Path dd = Path()..moveTo(xFor(0), yFor(peak[0]));
+    for (int i = 1; i < n; i++) {
+      dd.lineTo(xFor(i), yFor(peak[i - 1]));
+      dd.lineTo(xFor(i), yFor(peak[i]));
+    }
+    for (int i = n - 1; i >= 0; i--) {
+      dd.lineTo(xFor(i), yFor(eq[i]));
+    }
+    dd.close();
+    canvas.drawPath(
+      dd,
+      Paint()..color = t.bearBorder.withValues(alpha: 0.08),
     );
 
-    Offset pointAt(int i) {
-      final double x = series.length <= 1
-          ? 0
-          : (i / (series.length - 1)) * size.width;
-      final double y =
-          size.height - ((series[i] - minV) / (maxV - minV)) * size.height;
-      return Offset(x, y);
-    }
-
-    for (int i = 0; i < series.length - 1; i++) {
-      final double v = series[i + 1];
+    // --- Equity curve ---
+    for (int i = 1; i < n; i++) {
+      final bool up = eq[i] >= eq[i - 1];
       canvas.drawLine(
-        pointAt(i),
-        pointAt(i + 1),
+        Offset(xFor(i - 1), yFor(eq[i - 1])),
+        Offset(xFor(i), yFor(eq[i])),
         Paint()
-          ..color =
-              v >= 0 ? t.pendingBuyBackground : t.pendingSellBackground
+          ..color = up ? t.bullBorder : t.bearBorder
           ..strokeWidth = 2.0
           ..style = PaintingStyle.stroke,
       );
     }
-    canvas.drawCircle(pointAt(series.length - 1), 3.0,
-        Paint()..color = cumulative >= 0 ? t.bullBorder : t.pendingSellBackground);
+
+    // --- Crosshair + readout ---
+    final int? h = hoveredIndex;
+    if (h != null && h >= 0 && h < n) {
+      final double hx = xFor(h);
+      final double hy = yFor(eq[h]);
+      _drawDashed(
+        canvas,
+        Offset(hx, plotT),
+        Offset(hx, plotB),
+        Paint()
+          ..color = t.textSecondary
+          ..strokeWidth = 1.0,
+      );
+      canvas.drawCircle(Offset(hx, hy), 4.5, Paint()..color = t.textPrimary);
+      canvas.drawCircle(
+        Offset(hx, hy),
+        4.5,
+        Paint()
+          ..color = t.background
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke,
+      );
+
+      _drawReadout(canvas, size, plotL, plotT, plotR, plotW, h, eq, peak);
+    }
+  }
+
+  void _drawReadout(
+    Canvas canvas,
+    Size size,
+    double plotL,
+    double plotT,
+    double plotR,
+    double plotW,
+    int h,
+    List<double> eq,
+    List<double> peak,
+  ) {
+    final ChartTheme t = theme;
+    final List<List<Object>> lines = <List<Object>>[];
+    if (h == 0) {
+      lines.add(<Object>['Start (0.0)', true]);
+    } else {
+      final CompletedTrade tr = trades[h - 1];
+      lines.add(<Object>[
+        '#$h · ${tr.side == OrderSide.buy ? 'LONG' : 'SHORT'} · '
+            '${_fmtTime(tr.exitTime)}',
+        true,
+      ]);
+      final String r =
+          tr.realizedR != null ? ' (${_signed(tr.realizedR!, 2)}R)' : '';
+      lines.add(<Object>['Trade: ${_signed(tr.pnlPoints, 1)} pts$r', false]);
+    }
+    lines.add(<Object>['Equity: ${_signed(eq[h], 1)} pts', false]);
+    lines.add(<Object>[
+      'Drawdown: -${(peak[h] - eq[h]).toStringAsFixed(1)} pts',
+      false,
+    ]);
+
+    final List<TextPainter> tps = <TextPainter>[];
+    double boxW = 0;
+    double boxH = 0;
+    for (final List<Object> line in lines) {
+      final TextPainter tp = TextPainter(
+        text: TextSpan(
+          text: line[0] as String,
+          style: TextStyle(
+            color: t.textPrimary,
+            fontFamily: t.fontFamily,
+            fontSize: (line[1] as bool) ? 11 : 10,
+            fontWeight: (line[1] as bool) ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tps.add(tp);
+      boxW = math.max(boxW, tp.width);
+      boxH += tp.height + 2;
+    }
+    boxH += 12;
+    boxW += 16;
+
+    final double hoverX = plotL + (h / math.max(1, trades.length)) * plotW;
+    final bool leftHalf = hoverX < plotL + plotW / 2;
+    double bx = leftHalf ? plotR - boxW - 6 : plotL + 6;
+    bx = bx
+        .clamp(plotL + 2, math.max(plotL + 2, plotR - boxW - 2))
+        .toDouble();
+    final double by = plotT + 6;
+
+    canvas.drawRect(
+      Rect.fromLTWH(bx, by, boxW, boxH),
+      Paint()..color = t.background,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(bx, by, boxW, boxH),
+      Paint()
+        ..color = t.border
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke,
+    );
+
+    double ty = by + 6;
+    for (final TextPainter tp in tps) {
+      tp.paint(canvas, Offset(bx + 8, ty));
+      ty += tp.height + 2;
+    }
+  }
+
+  double _niceStep(double raw) {
+    if (raw <= 0 || !raw.isFinite) return 1.0;
+    final double exp = (math.log(raw) / math.ln10).floorToDouble();
+    final double base = math.pow(10.0, exp).toDouble();
+    final double f = raw / base;
+    double nice;
+    if (f <= 1.0) {
+      nice = 1.0;
+    } else if (f <= 2.0) {
+      nice = 2.0;
+    } else if (f <= 5.0) {
+      nice = 5.0;
+    } else {
+      nice = 10.0;
+    }
+    return nice * base;
+  }
+
+  TextStyle _axisStyle(ChartTheme t) => TextStyle(
+        color: t.textSecondary,
+        fontFamily: t.fontFamily,
+        fontSize: 10,
+      );
+
+  String _fmtTick(double v) {
+    if (v.abs() < 0.05) return '0.0';
+    final String s = v.toStringAsFixed(1);
+    return v > 0 ? '+$s' : s;
+  }
+
+  String _signed(double v, int digits) =>
+      '${v >= 0 ? '+' : ''}${v.toStringAsFixed(digits)}';
+
+  String _fmtTime(DateTime utc) {
+    final DateTime d = displayTimezone.toDisplayTime(utc);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} '
+        '${two(d.hour)}:${two(d.minute)}';
+  }
+
+  void _text(
+    Canvas canvas,
+    String text,
+    Offset anchor,
+    TextStyle style, {
+    bool alignRight = false,
+    bool centered = false,
+  }) {
+    final TextPainter tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    double dx = anchor.dx;
+    if (alignRight) {
+      dx = anchor.dx - tp.width;
+    } else if (centered) {
+      dx = anchor.dx - tp.width / 2;
+    }
+    tp.paint(canvas, Offset(dx, anchor.dy - tp.height / 2));
+  }
+
+  void _drawDashed(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+    const double dash = 4.0;
+    const double gap = 4.0;
+    final double total = (p2 - p1).distance;
+    if (total == 0) return;
+    final Offset dir = (p2 - p1) / total;
+    double current = 0;
+    while (current < total) {
+      canvas.drawLine(
+        p1 + dir * current,
+        p1 + dir * math.min(current + dash, total),
+        paint,
+      );
+      current += dash + gap;
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _EquityCurvePainter oldDelegate) => true;
+  bool shouldRepaint(covariant _EquityCurveChartPainter old) {
+    return !identical(old.trades, trades) ||
+        old.hoveredIndex != hoveredIndex ||
+        old.displayTimezone != displayTimezone;
+  }
 }
 
 /// Collapsible list of canceled / unfilled pending orders.
