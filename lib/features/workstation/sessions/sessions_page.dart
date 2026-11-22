@@ -573,7 +573,7 @@ class SessionsPageState extends State<SessionsPage>
                       ),
                     ),
                     // World-space layer: cards are always laid out at their
-                    // fixed 248x148 size and the whole layer is pan/zoom
+                    // fixed 300x148 size and the whole layer is pan/zoom
                     // transformed, so card-internal layout never scales with
                     // `_zoom`. The oversized `OverflowBox` canvas keeps distant
                     // cards renderable while the page-level `ClipRect` /
@@ -826,12 +826,12 @@ class _SessionCardState extends State<_SessionCard> {
     final bool active = widget.active;
 
     final DateTime now = DateTime.now().toUtc();
-    final String ageStr = formatRelativeAge(s.createdAt, now);
+    final String ageCompact = _compactAge(s.createdAt, now);
     final String activeStr = formatRelativeAge(s.lastActiveAt, now);
     final DateTime? lastTrade = s.lastTradeAt;
-    final String lastTradeStr = lastTrade == null
+    final String lastTradeCompact = lastTrade == null
         ? 'none'
-        : formatSessionTime(lastTrade, widget.displayTimezone);
+        : _compactTimestamp(lastTrade, widget.displayTimezone);
 
     // Border + shadow are reserved strictly for canvas selection; the active
     // Practice session is indicated by the terracotta ACTIVE badge instead.
@@ -918,14 +918,14 @@ class _SessionCardState extends State<_SessionCard> {
                         '\nLast Active: ${formatSessionTime(s.lastActiveAt, widget.displayTimezone)}'
                         '\nLast Trade: ${lastTrade == null ? 'none' : formatSessionTime(lastTrade, widget.displayTimezone)}',
                     child: Text(
-                      'Age $ageStr · Active $activeStr · Trade $lastTradeStr',
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
+                      'Age $ageCompact · Active $activeStr · Trade $lastTradeCompact',
+                      maxLines: 2,
+                      softWrap: true,
                       style: TextStyle(
                         color: t.textSecondary,
                         fontFamily: t.fontFamily,
                         fontSize: 11,
+                        height: 1.2,
                       ),
                     ),
                   ),
@@ -1292,4 +1292,23 @@ class _SessionCanvasPainter extends CustomPainter {
         old.selectedSessionId != selectedSessionId ||
         old.draggingId != draggingId;
   }
+}
+
+/// Compact age for the card metadata line, omitting the `'ago'` suffix.
+String _compactAge(DateTime timestamp, DateTime now) {
+  final Duration d = now.difference(timestamp);
+  if (d.isNegative || d.inMinutes < 1) return '0m';
+  if (d.inMinutes < 60) return '${d.inMinutes}m';
+  if (d.inHours < 24) return '${d.inHours}h';
+  if (d.inDays < 7) return '${d.inDays}d';
+  if (d.inDays < 30) return '${(d.inDays / 7).floor()}w';
+  if (d.inDays < 365) return '${(d.inDays / 30).floor()}mo';
+  return '${(d.inDays / 365).floor()}y';
+}
+
+/// `MM-DD HH:mm` in the display timezone (no 4-digit year).
+String _compactTimestamp(DateTime utcTime, DisplayTimezone timezone) {
+  final DateTime d = timezone.toDisplayTime(utcTime);
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
 }

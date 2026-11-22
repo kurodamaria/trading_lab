@@ -13,7 +13,7 @@ class SessionStore {
   static const String fileName = 'sessions.json';
   static const String activeSessionFileName = 'active_session.txt';
 
-  static const double cardWidth = 248.0;
+  static const double cardWidth = 300.0;
   static const double cardHeight = 148.0;
   static const double horizontalGap = 36.0;
   static const double verticalGap = 64.0;
