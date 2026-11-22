@@ -647,7 +647,7 @@ class MainChartPainter extends CustomPainter {
         text: text,
         style: TextStyle(
           color: textColor ?? theme.badgeText,
-          fontSize: 10,
+          fontSize: theme.scaledFontSize(10),
           fontFamily: theme.fontFamily,
         ),
       ),
@@ -808,7 +808,7 @@ class MainChartPainter extends CustomPainter {
         text: text,
         style: TextStyle(
           color: fg,
-          fontSize: 10,
+          fontSize: theme.scaledFontSize(10),
           fontFamily: theme.fontFamily,
         ),
       ),
@@ -908,7 +908,7 @@ class PriceAxisPainter extends CustomPainter {
         text: text,
         style: TextStyle(
           color: color,
-          fontSize: 11,
+          fontSize: theme.scaledFontSize(11),
           fontFamily: theme.fontFamily,
         ),
       ),
@@ -976,7 +976,7 @@ class TimeAxisPainter extends CustomPainter {
           text: tick.label,
           style: TextStyle(
             color: tick.major ? theme.textPrimary : theme.textSecondary,
-            fontSize: 11,
+            fontSize: theme.scaledFontSize(11),
             fontFamily: theme.fontFamily,
             fontWeight: tick.major ? FontWeight.bold : FontWeight.normal,
           ),
@@ -1007,7 +1007,7 @@ class TimeAxisPainter extends CustomPainter {
           text: label,
           style: TextStyle(
             color: theme.badgeText,
-            fontSize: 11,
+            fontSize: theme.scaledFontSize(11),
             fontFamily: theme.fontFamily,
           ),
         ),

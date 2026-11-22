@@ -39,7 +39,10 @@ class SessionsPage extends StatefulWidget {
 class SessionsPageState extends State<SessionsPage>
     with SingleTickerProviderStateMixin {
   static const double _cardWidth = SessionStore.cardWidth;
-  static const double _cardHeight = SessionStore.cardHeight;
+  /// Card height grows with the typography scale so larger text never
+  /// overflows the fixed 300x148 node at 1.30x.
+  double get _cardHeight =>
+      SessionStore.cardHeight * math.max(1.0, widget.theme.effectiveFontScale);
   static const double _minZoom = 0.35;
   static const double _maxZoom = 1.8;
   static const double _worldExtent = 100000.0;
@@ -563,6 +566,7 @@ class SessionsPageState extends State<SessionsPage>
                               sessions: _sessions,
                               panOffset: _panOffset,
                               zoom: _zoom,
+                              cardHeight: _cardHeight,
                               theme: t,
                               activeSessionId: widget.activeSessionId,
                               selectedSessionId: _selectedSessionId,
@@ -1178,6 +1182,7 @@ class _SessionCanvasPainter extends CustomPainter {
   final List<TradingSession> sessions;
   final Offset panOffset;
   final double zoom;
+  final double cardHeight;
   final ChartTheme theme;
   final String? activeSessionId;
   final String? selectedSessionId;
@@ -1187,6 +1192,7 @@ class _SessionCanvasPainter extends CustomPainter {
     required this.sessions,
     required this.panOffset,
     required this.zoom,
+    required this.cardHeight,
     required this.theme,
     required this.activeSessionId,
     required this.selectedSessionId,
@@ -1218,7 +1224,7 @@ class _SessionCanvasPainter extends CustomPainter {
         s.canvasX * zoom + panOffset.dx,
         s.canvasY * zoom + panOffset.dy,
         SessionStore.cardWidth * zoom,
-        SessionStore.cardHeight * zoom,
+        cardHeight * zoom,
       );
 
   void _paintConnectors(Canvas canvas) {
@@ -1288,6 +1294,7 @@ class _SessionCanvasPainter extends CustomPainter {
     return !identical(old.sessions, sessions) ||
         old.panOffset != panOffset ||
         old.zoom != zoom ||
+        old.cardHeight != cardHeight ||
         old.activeSessionId != activeSessionId ||
         old.selectedSessionId != selectedSessionId ||
         old.draggingId != draggingId;

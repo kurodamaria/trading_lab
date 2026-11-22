@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+const Object _unsetFontFamily = Object();
+
 class ChartTheme {
   final Color background;
   final Color axisBackground;
@@ -23,7 +25,15 @@ class ChartTheme {
   final Color activePillBackground;
   final Color activePillText;
   final Color pathColor;
-  final String fontFamily;
+
+  /// Effective font family. `null` means the platform/theme default.
+  final String? fontFamily;
+
+  /// Typography scale applied to chart text and the app-level text theme.
+  final double fontScale;
+
+  static const double minFontScale = 0.85;
+  static const double maxFontScale = 1.30;
 
   const ChartTheme({
     required this.background,
@@ -48,8 +58,77 @@ class ChartTheme {
     required this.activePillBackground,
     required this.activePillText,
     required this.pathColor,
-    required this.fontFamily,
+    this.fontFamily,
+    this.fontScale = 1.0,
   });
+
+  /// Clamped effective scale used for every rendered text size.
+  double get effectiveFontScale =>
+      fontScale.clamp(minFontScale, maxFontScale).toDouble();
+
+  /// Scales a base font size by the (clamped) typography scale.
+  double scaledFontSize(double baseSize) => baseSize * effectiveFontScale;
+
+  ChartTheme copyWith({
+    Color? background,
+    Color? axisBackground,
+    Color? axisActiveBackground,
+    Color? gridLine,
+    Color? border,
+    Color? textPrimary,
+    Color? textSecondary,
+    Color? bullBody,
+    Color? bullBorder,
+    Color? bearBody,
+    Color? bearBorder,
+    bool? hollowBull,
+    Color? crosshair,
+    Color? badgeBackground,
+    Color? badgeText,
+    Color? pendingBuyBackground,
+    Color? pendingBuyText,
+    Color? pendingSellBackground,
+    Color? pendingSellText,
+    Color? activePillBackground,
+    Color? activePillText,
+    Color? pathColor,
+    Object? fontFamily = _unsetFontFamily,
+    double? fontScale,
+  }) {
+    return ChartTheme(
+      background: background ?? this.background,
+      axisBackground: axisBackground ?? this.axisBackground,
+      axisActiveBackground: axisActiveBackground ?? this.axisActiveBackground,
+      gridLine: gridLine ?? this.gridLine,
+      border: border ?? this.border,
+      textPrimary: textPrimary ?? this.textPrimary,
+      textSecondary: textSecondary ?? this.textSecondary,
+      bullBody: bullBody ?? this.bullBody,
+      bullBorder: bullBorder ?? this.bullBorder,
+      bearBody: bearBody ?? this.bearBody,
+      bearBorder: bearBorder ?? this.bearBorder,
+      hollowBull: hollowBull ?? this.hollowBull,
+      crosshair: crosshair ?? this.crosshair,
+      badgeBackground: badgeBackground ?? this.badgeBackground,
+      badgeText: badgeText ?? this.badgeText,
+      pendingBuyBackground:
+          pendingBuyBackground ?? this.pendingBuyBackground,
+      pendingBuyText: pendingBuyText ?? this.pendingBuyText,
+      pendingSellBackground:
+          pendingSellBackground ?? this.pendingSellBackground,
+      pendingSellText: pendingSellText ?? this.pendingSellText,
+      activePillBackground:
+          activePillBackground ?? this.activePillBackground,
+      activePillText: activePillText ?? this.activePillText,
+      pathColor: pathColor ?? this.pathColor,
+      fontFamily: identical(fontFamily, _unsetFontFamily)
+          ? this.fontFamily
+          : fontFamily as String?,
+      fontScale: (fontScale ?? this.fontScale)
+          .clamp(minFontScale, maxFontScale)
+          .toDouble(),
+    );
+  }
 
   static const ChartTheme nytNewsprint = ChartTheme(
     background: Color(0xFFF7F5F0),

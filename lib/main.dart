@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -43,7 +44,13 @@ class ChartScreen extends StatefulWidget {
 class _ChartScreenState extends State<ChartScreen> {
   static const Duration baseBarStep = Duration(minutes: 1);
 
-  static const ChartTheme _theme = ChartTheme.nytNewsprint;
+  ChartTheme get _theme {
+    final ChartTheme base = ChartTheme.nytNewsprint;
+    final String? custom = _customFontFamily;
+    final String? family =
+        (custom != null && custom.trim().isNotEmpty) ? custom.trim() : base.fontFamily;
+    return base.copyWith(fontFamily: family, fontScale: _fontScale);
+  }
 
   List<Candle>? _base1mCandles;
   ReplayEngine? _replayEngine;
@@ -56,6 +63,11 @@ class _ChartScreenState extends State<ChartScreen> {
   TradingSession? _parentSession;
   TradingSession? _latestResumableSession;
   Timer? _sessionSaveTimer;
+
+  // Typography settings (persisted to <support>/ui_settings.json).
+  String? _customFontFamily;
+  double _fontScale = 1.0;
+  File? _uiSettingsFile;
 
   Timeframe _replayCadence = Timeframe.m15;
   OrderSide? _pendingPlacementSide;
@@ -477,6 +489,7 @@ class _ChartScreenState extends State<ChartScreen> {
       final SessionStore sessionStore = SessionStore(sessionsDir);
       final List<TradingSession> sessions = await sessionStore.loadAll();
       final String? lastId = await sessionStore.loadLastActiveSessionId();
+      await _loadUiSettings(support);
 
       TradingSession? matched;
       if (lastId != null) {
@@ -502,6 +515,73 @@ class _ChartScreenState extends State<ChartScreen> {
     } catch (_) {
       // Keep the synthetic fallback if the platform dir is unavailable.
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // UI PREFERENCES (typography)
+  // --------------------------------------------------------------------------
+  Future<void> _loadUiSettings(Directory support) async {
+    final File file =
+        File('${support.path}${Platform.pathSeparator}ui_settings.json');
+    _uiSettingsFile = file;
+    try {
+      if (!await file.exists()) return;
+      final String raw = await file.readAsString();
+      if (raw.trim().isEmpty) return;
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final dynamic rawFamily = decoded['customFontFamily'];
+      final dynamic rawScale = decoded['fontScale'];
+      final String? family = rawFamily is String && rawFamily.trim().isNotEmpty
+          ? rawFamily.trim()
+          : null;
+      final double scale = rawScale is num
+          ? rawScale.toDouble().clamp(
+                ChartTheme.minFontScale,
+                ChartTheme.maxFontScale,
+              )
+          : 1.0;
+      if (!mounted) return;
+      setState(() {
+        _customFontFamily = family;
+        _fontScale = scale;
+      });
+    } catch (_) {
+      // Ignore malformed settings and keep defaults.
+    }
+  }
+
+  Future<void> _saveUiSettings() async {
+    final File? file = _uiSettingsFile;
+    if (file == null) return;
+    try {
+      await file.parent.create(recursive: true);
+      await file.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'customFontFamily': _customFontFamily,
+          'fontScale': _fontScale,
+        }),
+      );
+    } catch (_) {
+      // Best-effort persistence.
+    }
+  }
+
+  void _onFontFamilyChanged(String? family) {
+    final String? normalized =
+        (family != null && family.trim().isNotEmpty) ? family.trim() : null;
+    setState(() => _customFontFamily = normalized);
+    _saveUiSettings();
+  }
+
+  void _onFontScaleChanged(double scale) {
+    setState(() {
+      _fontScale = scale.clamp(
+        ChartTheme.minFontScale,
+        ChartTheme.maxFontScale,
+      );
+    });
+    _saveUiSettings();
   }
 
   TradingSession? _mostRecent(List<TradingSession> sessions) {
@@ -793,6 +873,10 @@ class _ChartScreenState extends State<ChartScreen> {
                   theme: t,
                   selected: _displayTimezone,
                   onChanged: (tz) => setState(() => _displayTimezone = tz),
+                  customFontFamily: _customFontFamily,
+                  fontScale: _fontScale,
+                  onFontFamilyChanged: _onFontFamilyChanged,
+                  onFontScaleChanged: _onFontScaleChanged,
                 ),
               ],
             ),
@@ -801,9 +885,49 @@ class _ChartScreenState extends State<ChartScreen> {
       ),
     );
 
-    return Scaffold(
-      backgroundColor: t.background,
-      body: content,
+    return Theme(
+      data: _buildAppTheme(t),
+      child: Scaffold(
+        backgroundColor: t.background,
+        body: content,
+      ),
+    );
+  }
+
+  /// Applies the active [ChartTheme] typography to the Material text theme.
+  ThemeData _buildAppTheme(ChartTheme t) {
+    final ThemeData base = ThemeData.light(useMaterial3: false);
+    final TextTheme tt = base.textTheme;
+    TextStyle? scaled(TextStyle? style) {
+      if (style == null) return null;
+      return style.copyWith(
+        fontFamily: t.fontFamily,
+        fontSize: (style.fontSize ?? 14) * t.effectiveFontScale,
+      );
+    }
+
+    return ThemeData(
+      brightness: Brightness.light,
+      useMaterial3: false,
+      scaffoldBackgroundColor: t.background,
+      fontFamily: t.fontFamily,
+      textTheme: tt.copyWith(
+        displayLarge: scaled(tt.displayLarge),
+        displayMedium: scaled(tt.displayMedium),
+        displaySmall: scaled(tt.displaySmall),
+        headlineLarge: scaled(tt.headlineLarge),
+        headlineMedium: scaled(tt.headlineMedium),
+        headlineSmall: scaled(tt.headlineSmall),
+        titleLarge: scaled(tt.titleLarge),
+        titleMedium: scaled(tt.titleMedium),
+        titleSmall: scaled(tt.titleSmall),
+        bodyLarge: scaled(tt.bodyLarge),
+        bodyMedium: scaled(tt.bodyMedium),
+        bodySmall: scaled(tt.bodySmall),
+        labelLarge: scaled(tt.labelLarge),
+        labelMedium: scaled(tt.labelMedium),
+        labelSmall: scaled(tt.labelSmall),
+      ),
     );
   }
 
