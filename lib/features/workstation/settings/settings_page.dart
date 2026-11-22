@@ -391,7 +391,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: t.textPrimary,
                     fontFamily:
                         previewFamily.isEmpty ? t.fontFamily : previewFamily,
-                    fontSize: 14 * scale,
+                    fontSize: 14,
                   ),
                 ),
               ),

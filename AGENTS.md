@@ -17,15 +17,16 @@
 - Do not add fade animations to chart candles.
 
 ## Git Hygiene (Strict)
-- Never run `git commit` or `git push` unless explicitly instructed by the user in the current turn.
-- Never stage or leave behind temporary patch files (`patch.txt`, `*.bak`, `*.orig`).
-- At the end of every completed task, run `flutter analyze && dart test`, run `git status -s`, and print a suggested one-line conventional commit command (`git add -A && git commit -m "..."`) for the user to run after visual hot-reload verification.
+- Never run `git push`, `git commit --amend`, or destructive resets (`git reset --hard`, `git checkout -- .`) unless explicitly instructed by the user.
+- Never stage or leave behind temporary patch files (`patch.txt`, `*.bak`, `*.orig`) or local data/media files (`*.csv`, `*.bin`, `*.png`).
+- After every completed task, **only if `flutter analyze && dart test` exits 0**, inspect `git status -s`, stage only intended source/test/project files (`git add lib/ test/ pubspec.yaml ...`, never blind `git add -A` when untracked data/media files exist), and create a concise conventional commit (`feat:`, `fix:`, `refactor:`, `chore:`).
+- If verification fails or no files changed, do NOT commit.
 
 ## Execution & Output Contract
 - Use targeted `SEARCH/REPLACE` edits on existing files; avoid full-file rewrites.
 - Never leave empty `() {}` stubs or `// TODO` placeholders; if an interface is ambiguous, stop and ask in 1 line.
-- Run `flutter analyze` (and `dart test` when `lib/domain/` or `test/` changes) before finishing.
-- Skip narration; respond with a single line: `OK: <modified/created files>`.
+- Run `flutter analyze && dart test` before committing and finishing.
+- Skip narration; respond with a single line: `OK (<short-sha>): <modified/created files> — <commit message>`.
 
 ## Flutter & Chart State Discipline
 - **Zero Collection Allocation in `build()`:** Never pass `.toList()` or newly constructed lists/maps into child widgets inside `build()`. Cache derived lists in `State` and update them only when the underlying data changes so `identical()` checks in `didUpdateWidget` remain valid.

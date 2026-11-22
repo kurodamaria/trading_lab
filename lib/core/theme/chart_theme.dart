@@ -130,6 +130,40 @@ class ChartTheme {
     );
   }
 
+  /// Builds the app-level [ThemeData] for this chart theme. Font families are
+  /// applied here, but font sizes are intentionally left untouched — global
+  /// scaling is handled once by `MediaQuery.textScaler` at the app root, which
+  /// prevents double-scaling of widget text.
+  ThemeData buildThemeData() {
+    final ThemeData base = ThemeData.light(useMaterial3: false);
+    final TextTheme tt = base.textTheme;
+    TextStyle? withFamily(TextStyle? style) =>
+        style?.copyWith(fontFamily: fontFamily);
+    return ThemeData(
+      brightness: Brightness.light,
+      useMaterial3: false,
+      scaffoldBackgroundColor: background,
+      fontFamily: fontFamily,
+      textTheme: tt.copyWith(
+        displayLarge: withFamily(tt.displayLarge),
+        displayMedium: withFamily(tt.displayMedium),
+        displaySmall: withFamily(tt.displaySmall),
+        headlineLarge: withFamily(tt.headlineLarge),
+        headlineMedium: withFamily(tt.headlineMedium),
+        headlineSmall: withFamily(tt.headlineSmall),
+        titleLarge: withFamily(tt.titleLarge),
+        titleMedium: withFamily(tt.titleMedium),
+        titleSmall: withFamily(tt.titleSmall),
+        bodyLarge: withFamily(tt.bodyLarge),
+        bodyMedium: withFamily(tt.bodyMedium),
+        bodySmall: withFamily(tt.bodySmall),
+        labelLarge: withFamily(tt.labelLarge),
+        labelMedium: withFamily(tt.labelMedium),
+        labelSmall: withFamily(tt.labelSmall),
+      ),
+    );
+  }
+
   static const ChartTheme nytNewsprint = ChartTheme(
     background: Color(0xFFF7F5F0),
     axisBackground: Color(0xFFEDEAE2),
