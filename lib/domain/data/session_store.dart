@@ -30,9 +30,22 @@ class SessionStore {
   File get _activeFile =>
       File('${storageDir.path}${Platform.pathSeparator}$activeSessionFileName');
 
-  /// Reads the id of the last session the user had open, or `null` when none
-  /// was recorded.
-  Future<String?> loadLastActiveSessionId() async {
+  Future<void> _writeChain = Future<void>.value();
+
+  /// Runs [action] after all previously queued writes complete, so mutating
+  /// operations are strictly serialized. The internal chain swallows errors so
+  /// one failed write never poisons later writes; the returned future still
+  /// reports the error to the caller.
+  Future<T> _enqueueWrite<T>(Future<T> Function() action) {
+    final Future<T> result = _writeChain.then((_) => action());
+    _writeChain = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<String?> _loadLastActiveSessionIdUnlocked() async {
     final File f = _activeFile;
     if (!await f.exists()) return null;
     final String raw = await f.readAsString();
@@ -40,9 +53,12 @@ class SessionStore {
     return trimmed.isEmpty ? null : trimmed;
   }
 
-  /// Persists [sessionId] as the resumable session, or clears the marker when
-  /// [sessionId] is `null`/empty.
-  Future<void> saveLastActiveSessionId(String? sessionId) async {
+  /// Reads the id of the last session the user had open, or `null` when none
+  /// was recorded.
+  Future<String?> loadLastActiveSessionId() =>
+      _loadLastActiveSessionIdUnlocked();
+
+  Future<void> _saveLastActiveSessionIdUnlocked(String? sessionId) async {
     final File f = _activeFile;
     if (sessionId == null || sessionId.isEmpty) {
       if (await f.exists()) await f.delete();
@@ -54,25 +70,64 @@ class SessionStore {
     await f.writeAsString(sessionId);
   }
 
-  Future<List<TradingSession>> loadAll() async {
+  /// Persists [sessionId] as the resumable session, or clears the marker when
+  /// [sessionId] is `null`/empty.
+  Future<void> saveLastActiveSessionId(String? sessionId) =>
+      _enqueueWrite(() => _saveLastActiveSessionIdUnlocked(sessionId));
+
+  Future<List<TradingSession>> loadAll() => _loadAllUnlocked();
+
+  Future<List<TradingSession>> _loadAllUnlocked() async {
     final File f = _file;
     if (!await f.exists()) return <TradingSession>[];
     final String raw = await f.readAsString();
     if (raw.trim().isEmpty) return <TradingSession>[];
-    final dynamic decoded = jsonDecode(raw);
-    if (decoded is! Map) return <TradingSession>[];
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {
+      await _quarantineCorrupt(f);
+      return <TradingSession>[];
+    }
+    if (decoded is! Map) {
+      await _quarantineCorrupt(f);
+      return <TradingSession>[];
+    }
     final dynamic list = decoded['sessions'];
     if (list is! List) return <TradingSession>[];
+
     final List<TradingSession> out = <TradingSession>[];
     for (final dynamic e in list) {
-      if (e is Map) {
+      if (e is! Map) continue;
+      try {
         out.add(TradingSession.fromJson(Map<String, dynamic>.from(e)));
+      } catch (_) {
+        // Skip a single malformed session rather than losing the whole file.
       }
     }
     return out;
   }
 
-  Future<void> saveAll(List<TradingSession> sessions) async {
+  /// Moves a corrupt `sessions.json` aside so a subsequent write can start
+  /// from a clean slate without losing the original bytes.
+  Future<void> _quarantineCorrupt(File f) async {
+    final String stamp =
+        DateTime.now().toUtc().millisecondsSinceEpoch.toString();
+    final String backup = '${f.path}.corrupt.$stamp';
+    try {
+      await f.rename(backup);
+    } catch (_) {
+      try {
+        await f.copy(backup);
+        await f.delete();
+      } catch (_) {
+        // Best-effort; leave the original in place otherwise.
+      }
+    }
+  }
+
+  Future<void> _saveAllUnlocked(List<TradingSession> sessions) async {
     if (!await storageDir.exists()) {
       await storageDir.create(recursive: true);
     }
@@ -91,32 +146,41 @@ class SessionStore {
     }
   }
 
-  Future<void> upsert(TradingSession session) async {
-    final List<TradingSession> all = await loadAll();
-    final int idx = all.indexWhere((s) => s.id == session.id);
-    if (idx == -1) {
-      all.add(session);
-    } else {
-      all[idx] = session;
-    }
-    await saveAll(all);
+  Future<void> saveAll(List<TradingSession> sessions) =>
+      _enqueueWrite(() => _saveAllUnlocked(sessions));
+
+  Future<void> upsert(TradingSession session) {
+    return _enqueueWrite(() async {
+      final List<TradingSession> all = await _loadAllUnlocked();
+      final int idx = all.indexWhere((s) => s.id == session.id);
+      if (idx == -1) {
+        all.add(session);
+      } else {
+        all[idx] = session;
+      }
+      await _saveAllUnlocked(all);
+    });
   }
 
   /// Removes [sessionId] only if no other session forks from it.
-  Future<void> deleteLeaf(String sessionId) async {
-    final List<TradingSession> all = await loadAll();
-    final bool hasChild = all.any((s) => s.parentId == sessionId);
-    if (hasChild) {
-      throw StateError(
-        'Cannot delete session $sessionId: it still has child sessions.',
-      );
-    }
-    final int before = all.length;
-    all.removeWhere((s) => s.id == sessionId);
-    if (all.length == before) return;
-    await saveAll(all);
-    final String? last = await loadLastActiveSessionId();
-    if (last == sessionId) await saveLastActiveSessionId(null);
+  Future<void> deleteLeaf(String sessionId) {
+    return _enqueueWrite(() async {
+      final List<TradingSession> all = await _loadAllUnlocked();
+      final bool hasChild = all.any((s) => s.parentId == sessionId);
+      if (hasChild) {
+        throw StateError(
+          'Cannot delete session $sessionId: it still has child sessions.',
+        );
+      }
+      final int before = all.length;
+      all.removeWhere((s) => s.id == sessionId);
+      if (all.length == before) return;
+      await _saveAllUnlocked(all);
+      final String? last = await _loadLastActiveSessionIdUnlocked();
+      if (last == sessionId) {
+        await _saveLastActiveSessionIdUnlocked(null);
+      }
+    });
   }
 
   /// Deterministically arranges root trees side-by-side and nests forks

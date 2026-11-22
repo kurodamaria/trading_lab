@@ -373,23 +373,134 @@ class BinaryCandleStore {
 
   List<DatasetMetadata> _readCatalog() {
     final File f = _catalogFile;
-    if (!f.existsSync()) return <DatasetMetadata>[];
-    final dynamic decoded = jsonDecode(f.readAsStringSync());
-    if (decoded is! Map) return <DatasetMetadata>[];
+    if (!f.existsSync()) {
+      final List<DatasetMetadata> rebuilt = _rebuildCatalogFromBins();
+      if (rebuilt.isNotEmpty) {
+        try {
+          _writeCatalog(rebuilt);
+        } catch (_) {
+          // Best-effort; the in-memory result is still returned.
+        }
+      }
+      return rebuilt;
+    }
+    final String raw = f.readAsStringSync();
+    if (raw.trim().isEmpty) return _recoverCatalog(f);
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {
+      return _recoverCatalog(f);
+    }
+    if (decoded is! Map) return _recoverCatalog(f);
     final dynamic datasets = decoded['datasets'];
     if (datasets is! List) return <DatasetMetadata>[];
-    return datasets
-        .map((e) => DatasetMetadata.fromJson(
-              Map<String, dynamic>.from(e as Map),
-            ))
-        .toList();
+
+    final List<DatasetMetadata> out = <DatasetMetadata>[];
+    for (final dynamic e in datasets) {
+      if (e is! Map) continue;
+      try {
+        out.add(DatasetMetadata.fromJson(Map<String, dynamic>.from(e)));
+      } catch (_) {
+        // Skip a single malformed catalog entry.
+      }
+    }
+    return out;
+  }
+
+  /// Quarantines a corrupt catalog and rebuilds metadata from on-disk `.bin`
+  /// headers so imported datasets are never orphaned.
+  List<DatasetMetadata> _recoverCatalog(File f) {
+    _quarantineCorruptCatalog(f);
+    final List<DatasetMetadata> rebuilt = _rebuildCatalogFromBins();
+    if (rebuilt.isNotEmpty) {
+      try {
+        _writeCatalog(rebuilt);
+      } catch (_) {
+        // Best-effort; the in-memory result is still returned.
+      }
+    }
+    return rebuilt;
+  }
+
+  void _quarantineCorruptCatalog(File f) {
+    final String stamp =
+        DateTime.now().toUtc().millisecondsSinceEpoch.toString();
+    final String backup = '${f.path}.corrupt.$stamp';
+    try {
+      f.renameSync(backup);
+    } catch (_) {
+      try {
+        f.copySync(backup);
+        f.deleteSync();
+      } catch (_) {
+        // Best-effort; leave the original in place otherwise.
+      }
+    }
+  }
+
+  /// Scans `<storageDir>/*.bin` headers and reconstructs catalogue entries.
+  List<DatasetMetadata> _rebuildCatalogFromBins() {
+    final List<DatasetMetadata> out = <DatasetMetadata>[];
+    if (!storageDir.existsSync()) return out;
+    for (final FileSystemEntity entity in storageDir.listSync()) {
+      if (entity is! File) continue;
+      final String name = _basename(entity.path);
+      if (!name.toLowerCase().endsWith('.bin')) continue;
+      try {
+        final RandomAccessFile raf = entity.openSync();
+        try {
+          final Uint8List header = raf.readSync(headerBytes);
+          if (header.length < headerBytes ||
+              header[0] != 0x54 ||
+              header[1] != 0x4C ||
+              header[2] != 0x41 ||
+              header[3] != 0x42) {
+            continue;
+          }
+          final ByteData hb = ByteData.sublistView(header);
+          final int barCount = hb.getUint64(8, Endian.little);
+          final int firstMs = hb.getInt64(16, Endian.little);
+          final int lastMs = hb.getInt64(24, Endian.little);
+          final String sha = name.substring(0, name.length - 4);
+          out.add(
+            DatasetMetadata(
+              sha256: sha,
+              name: sha,
+              barCount: barCount,
+              firstTime:
+                  DateTime.fromMillisecondsSinceEpoch(firstMs, isUtc: true),
+              lastTime:
+                  DateTime.fromMillisecondsSinceEpoch(lastMs, isUtc: true),
+              importedAt: entity.statSync().modified,
+              binSizeBytes: entity.lengthSync(),
+            ),
+          );
+        } finally {
+          raf.closeSync();
+        }
+      } catch (_) {
+        // Skip unreadable / invalid binaries.
+      }
+    }
+    return out;
   }
 
   void _writeCatalog(List<DatasetMetadata> list) {
+    if (!storageDir.existsSync()) storageDir.createSync(recursive: true);
     final Map<String, dynamic> data = <String, dynamic>{
       'datasets': list.map((e) => e.toJson()).toList(),
     };
-    _catalogFile.writeAsStringSync(jsonEncode(data));
+    final File target = _catalogFile;
+    final File tmp = File('${target.path}.tmp');
+    tmp.writeAsStringSync(jsonEncode(data));
+    try {
+      tmp.renameSync(target.path);
+    } on FileSystemException {
+      if (target.existsSync()) target.deleteSync();
+      tmp.renameSync(target.path);
+    }
   }
 
   DatasetMetadata? _findInCatalog(String sha256) {
