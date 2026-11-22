@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/chart_theme.dart';
 import '../../../domain/data/binary_candle_store.dart';
 import '../../../domain/data/session_store.dart';
+import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/trading_session.dart';
 import 'session_dialogs.dart';
 
@@ -17,6 +18,7 @@ class SessionsPage extends StatefulWidget {
   final String? activeSessionId;
   final ValueChanged<TradingSession> onOpenSession;
   final VoidCallback? onActiveSessionClosed;
+  final DisplayTimezone displayTimezone;
   final ChartTheme theme;
 
   const SessionsPage({
@@ -26,6 +28,7 @@ class SessionsPage extends StatefulWidget {
     required this.activeSessionId,
     required this.onOpenSession,
     this.onActiveSessionClosed,
+    this.displayTimezone = DisplayTimezone.utc,
     required this.theme,
   });
 
@@ -326,6 +329,7 @@ class SessionsPageState extends State<SessionsPage>
       hypothesis: '',
       createdAt: now,
       updatedAt: now,
+      lastActiveAt: now,
       datasetId: req.dataset.id,
       datasetLabel: req.dataset.label,
       windowStartIndex: req.windowStartIndex,
@@ -364,6 +368,7 @@ class SessionsPageState extends State<SessionsPage>
       hypothesis: req.hypothesis,
       createdAt: now,
       updatedAt: now,
+      lastActiveAt: now,
       datasetId: parent.datasetId,
       datasetLabel: parent.datasetLabel,
       windowStartIndex: parent.windowStartIndex,
@@ -653,6 +658,7 @@ class SessionsPageState extends State<SessionsPage>
         child: _SessionCard(
           session: s,
           theme: widget.theme,
+          displayTimezone: widget.displayTimezone,
           active: s.id == widget.activeSessionId,
           isSelected: s.id == _selectedSessionId,
           isLeaf: !_hasChildren(s.id),
@@ -782,6 +788,7 @@ class SessionsPageState extends State<SessionsPage>
 class _SessionCard extends StatefulWidget {
   final TradingSession session;
   final ChartTheme theme;
+  final DisplayTimezone displayTimezone;
   final bool active;
   final bool isSelected;
   final bool isLeaf;
@@ -793,6 +800,7 @@ class _SessionCard extends StatefulWidget {
   const _SessionCard({
     required this.session,
     required this.theme,
+    required this.displayTimezone,
     required this.active,
     required this.isSelected,
     required this.isLeaf,
@@ -816,6 +824,14 @@ class _SessionCardState extends State<_SessionCard> {
     final double pnl = s.netPnlPoints;
     final bool selected = widget.isSelected;
     final bool active = widget.active;
+
+    final DateTime now = DateTime.now().toUtc();
+    final String ageStr = formatRelativeAge(s.createdAt, now);
+    final String activeStr = formatRelativeAge(s.lastActiveAt, now);
+    final DateTime? lastTrade = s.lastTradeAt;
+    final String lastTradeStr = lastTrade == null
+        ? 'none'
+        : formatSessionTime(lastTrade, widget.displayTimezone);
 
     // Border + shadow are reserved strictly for canvas selection; the active
     // Practice session is indicated by the terracotta ACTIVE badge instead.
@@ -893,6 +909,24 @@ class _SessionCardState extends State<_SessionCard> {
                       fontFamily: t.fontFamily,
                       fontSize: 10,
                       height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Tooltip(
+                    message:
+                        'Created: ${formatSessionTime(s.createdAt, widget.displayTimezone)}'
+                        '\nLast Active: ${formatSessionTime(s.lastActiveAt, widget.displayTimezone)}'
+                        '\nLast Trade: ${lastTrade == null ? 'none' : formatSessionTime(lastTrade, widget.displayTimezone)}',
+                    child: Text(
+                      'Age $ageStr · Active $activeStr · Trade $lastTradeStr',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: t.textSecondary,
+                        fontFamily: t.fontFamily,
+                        fontSize: 11,
+                      ),
                     ),
                   ),
                 ],

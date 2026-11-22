@@ -602,12 +602,13 @@ class _ChartScreenState extends State<ChartScreen> {
     }
 
     if (!mounted) return;
+    final DateTime openedAt = DateTime.now().toUtc();
     setState(() {
       _replayEngine = engine;
-      _activeSession = session;
+      _activeSession = session.copyWith(lastActiveAt: openedAt);
       _parentSession = parent;
       _activeSessionId = session.id;
-      _latestResumableSession = session;
+      _latestResumableSession = _activeSession;
       _replayCadence = session.initialCadence;
       _paths
         ..clear()
@@ -641,6 +642,7 @@ class _ChartScreenState extends State<ChartScreen> {
     final TradingSession? session = _activeSession;
     final ReplayEngine? engine = _replayEngine;
     if (session == null || engine == null) return;
+    final DateTime savedAt = DateTime.now().toUtc();
     final TradingSession updated = session.copyWith(
       cursorIndex: engine.cursorIndex,
       isCompleted: engine.isCompleted,
@@ -649,7 +651,8 @@ class _ChartScreenState extends State<ChartScreen> {
       pendingOrders: List<PendingOrder>.from(engine.pendingOrders),
       canceledOrders: List<CanceledOrder>.from(engine.canceledOrders),
       paths: List<CrossTimeframePath>.from(_paths),
-      updatedAt: DateTime.now(),
+      updatedAt: savedAt,
+      lastActiveAt: savedAt,
     );
     _activeSession = updated;
     _latestResumableSession = updated;
@@ -768,6 +771,7 @@ class _ChartScreenState extends State<ChartScreen> {
                   activeSessionId: _activeSessionId,
                   onOpenSession: _openSession,
                   onActiveSessionClosed: _closeActiveSession,
+                  displayTimezone: _displayTimezone,
                   theme: t,
                 ),
                 practice,

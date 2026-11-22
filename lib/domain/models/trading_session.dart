@@ -1,3 +1,4 @@
+import 'display_timezone.dart';
 import 'drawing.dart';
 import 'order.dart';
 import 'timeframe.dart';
@@ -89,6 +90,7 @@ class TradingSession {
   final String hypothesis;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime lastActiveAt;
 
   // Dataset & replay window.
   final String datasetId;
@@ -111,14 +113,15 @@ class TradingSession {
   final double canvasX;
   final double canvasY;
 
-  const TradingSession({
+  TradingSession({
     required this.id,
     this.parentId,
     required this.name,
     required this.changeType,
     this.hypothesis = '',
-    required this.createdAt,
-    required this.updatedAt,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    DateTime? lastActiveAt,
     required this.datasetId,
     required this.datasetLabel,
     required this.windowStartIndex,
@@ -134,7 +137,22 @@ class TradingSession {
     this.paths = const [],
     this.canvasX = 0.0,
     this.canvasY = 0.0,
-  });
+  })  : createdAt = createdAt ?? DateTime.now().toUtc(),
+        updatedAt = updatedAt ?? DateTime.now().toUtc(),
+        lastActiveAt = lastActiveAt ?? DateTime.now().toUtc();
+
+  /// Latest trade timestamp across closed trades and any open position entry.
+  DateTime? get lastTradeAt {
+    DateTime? last;
+    for (final CompletedTrade t in closedTrades) {
+      if (last == null || t.exitTime.isAfter(last)) last = t.exitTime;
+    }
+    final DateTime? openEntry = openPosition?.entryTime;
+    if (openEntry != null && (last == null || openEntry.isAfter(last))) {
+      last = openEntry;
+    }
+    return last;
+  }
 
   /// Number of bars spanned by the replay window (inclusive).
   int get totalBars {
@@ -179,6 +197,7 @@ class TradingSession {
     String? hypothesis,
     DateTime? createdAt,
     DateTime? updatedAt,
+    DateTime? lastActiveAt,
     String? datasetId,
     String? datasetLabel,
     int? windowStartIndex,
@@ -203,6 +222,7 @@ class TradingSession {
       hypothesis: hypothesis ?? this.hypothesis,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      lastActiveAt: lastActiveAt ?? this.lastActiveAt,
       datasetId: datasetId ?? this.datasetId,
       datasetLabel: datasetLabel ?? this.datasetLabel,
       windowStartIndex: windowStartIndex ?? this.windowStartIndex,
@@ -231,6 +251,7 @@ class TradingSession {
         'hypothesis': hypothesis,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
+        'lastActiveAt': lastActiveAt.toIso8601String(),
         'datasetId': datasetId,
         'datasetLabel': datasetLabel,
         'windowStartIndex': windowStartIndex,
@@ -251,6 +272,13 @@ class TradingSession {
       };
 
   factory TradingSession.fromJson(Map<String, dynamic> json) {
+    final DateTime created = _parseDate(json['createdAt']) ??
+        DateTime.now().toUtc();
+    final DateTime lastActive = _parseDate(json['lastActiveAt']) ??
+        _parseDate(json['updatedAt']) ??
+        created;
+    final DateTime updated =
+        _parseDate(json['updatedAt']) ?? lastActive;
     return TradingSession(
       id: json['id'] as String,
       parentId: json['parentId'] as String?,
@@ -261,8 +289,9 @@ class TradingSession {
         SessionChangeType.root,
       ),
       hypothesis: (json['hypothesis'] as String?) ?? '',
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      updatedAt: DateTime.parse(json['updatedAt'] as String),
+      createdAt: created,
+      updatedAt: updated,
+      lastActiveAt: lastActive,
       datasetId: json['datasetId'] as String,
       datasetLabel: json['datasetLabel'] as String,
       windowStartIndex: json['windowStartIndex'] as int,
@@ -291,6 +320,35 @@ class TradingSession {
       canvasY: (json['canvasY'] as num?)?.toDouble() ?? 0.0,
     );
   }
+}
+
+// -----------------------------------------------------------------------------
+// Session lifecycle formatting helpers (pure Dart).
+// -----------------------------------------------------------------------------
+
+/// Compact relative age such as `'just now'`, `'12m ago'`, `'5h ago'`.
+String formatRelativeAge(DateTime timestamp, DateTime now) {
+  final Duration d = now.difference(timestamp);
+  if (d.isNegative || d.inMinutes < 1) return 'just now';
+  if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+  if (d.inHours < 24) return '${d.inHours}h ago';
+  if (d.inDays < 7) return '${d.inDays}d ago';
+  if (d.inDays < 30) return '${(d.inDays / 7).floor()}w ago';
+  if (d.inDays < 365) return '${(d.inDays / 30).floor()}mo ago';
+  return '${(d.inDays / 365).floor()}y ago';
+}
+
+/// Compact timestamp (`YYYY-MM-DD HH:mm`) in the chosen display timezone.
+String formatSessionTime(DateTime utcTime, DisplayTimezone timezone) {
+  final DateTime d = timezone.toDisplayTime(utcTime);
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${d.year}-${two(d.month)}-${two(d.day)} '
+      '${two(d.hour)}:${two(d.minute)}';
+}
+
+DateTime? _parseDate(dynamic raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  return DateTime.tryParse(raw);
 }
 
 // -----------------------------------------------------------------------------

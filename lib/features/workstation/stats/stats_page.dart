@@ -191,6 +191,7 @@ class StatsPage extends StatelessWidget {
 
   Widget _sessionHeader(ChartTheme t, List<CompletedTrade> trades) {
     final TradingSession s = activeSession!;
+    final DateTime now = DateTime.now().toUtc();
     final int n = trades.length;
     final double winPct =
         n == 0 ? 0 : trades.where((x) => x.pnlPoints > 0).length / n * 100.0;
@@ -250,6 +251,19 @@ class StatsPage extends StatelessWidget {
               fontSize: 12,
               height: 1.35,
               fontStyle: FontStyle.italic,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Created ${formatSessionTime(s.createdAt, displayTimezone)} '
+            '(${formatRelativeAge(s.createdAt, now)}) · '
+            'Last Active ${formatRelativeAge(s.lastActiveAt, now)} · '
+            'Last Trade ${s.lastTradeAt == null ? 'None' : formatSessionTime(s.lastTradeAt!, displayTimezone)}',
+            style: TextStyle(
+              color: t.textSecondary,
+              fontFamily: t.fontFamily,
+              fontSize: 11,
+              height: 1.3,
             ),
           ),
           if (parentSession != null) ...[
