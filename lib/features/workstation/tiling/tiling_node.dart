@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../domain/models/indicator.dart';
 import '../../../domain/models/timeframe.dart';
 
 /// Recursive binary tree describing how chart panes are tiled.
@@ -20,7 +21,12 @@ sealed class TilingNode {
         direction: direction,
         ratio: 0.5,
         first: self,
-        second: PaneNode(id: _newNodeId(), timeframe: newTimeframe),
+        second: PaneNode(
+          id: _newNodeId(),
+          timeframe: newTimeframe,
+          indicators: self.indicators,
+          showVolume: self.showVolume,
+        ),
       );
     }
     return self;
@@ -126,33 +132,25 @@ class SplitNode extends TilingNode {
 
 class PaneNode extends TilingNode {
   final Timeframe timeframe;
-  final bool showEma20;
-  final bool showEma50;
-  final bool showEma200;
+  final List<IndicatorConfig> indicators;
   final bool showVolume;
 
   const PaneNode({
     required super.id,
     this.timeframe = Timeframe.m15,
-    this.showEma20 = true,
-    this.showEma50 = true,
-    this.showEma200 = false,
+    this.indicators = IndicatorConfig.defaults,
     this.showVolume = false,
   });
 
   PaneNode copyWith({
     Timeframe? timeframe,
-    bool? showEma20,
-    bool? showEma50,
-    bool? showEma200,
+    List<IndicatorConfig>? indicators,
     bool? showVolume,
   }) {
     return PaneNode(
       id: id,
       timeframe: timeframe ?? this.timeframe,
-      showEma20: showEma20 ?? this.showEma20,
-      showEma50: showEma50 ?? this.showEma50,
-      showEma200: showEma200 ?? this.showEma200,
+      indicators: indicators ?? this.indicators,
       showVolume: showVolume ?? this.showVolume,
     );
   }

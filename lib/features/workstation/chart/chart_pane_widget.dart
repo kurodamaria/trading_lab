@@ -9,11 +9,13 @@ import '../../../domain/engine/bar_aggregator.dart';
 import '../../../domain/models/candle.dart';
 import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
+import '../../../domain/models/indicator.dart';
 import '../../../domain/models/order.dart';
 import '../../../domain/models/timeframe.dart';
 import '../tiling/tiling_node.dart';
 import 'chart_painters.dart';
 import 'chart_viewport.dart';
+import 'indicator_dialogs.dart';
 
 /// A self-contained, fully interactive chart pane for a single [PaneNode].
 class ChartPaneWidget extends StatefulWidget {
@@ -98,6 +100,11 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   List<Candle> _candles = [];
   late ChartViewport _viewport;
 
+  Map<String, List<double?>> _indicatorSeries = <String, List<double?>>{};
+  List<IndicatorSeries> _emaOverlays = const <IndicatorSeries>[];
+  List<IndicatorSeries> _rsiOverlays = const <IndicatorSeries>[];
+  Offset? _rsiCursorPos;
+
   Offset? _cursorPos;
   bool _isPanningChart = false;
   bool _isDraggingPriceAxis = false;
@@ -161,6 +168,12 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
     super.didUpdateWidget(oldWidget);
     final bool sameTimeframe =
         widget.node.timeframe == oldWidget.node.timeframe;
+    final bool indicatorsChanged =
+        !identical(widget.node.indicators, oldWidget.node.indicators);
+    if (indicatorsChanged) {
+      // Recompute overlays without touching the viewport.
+      _recomputeIndicators();
+    }
     if (sameTimeframe &&
         identical(widget.base1mCandles, oldWidget.base1mCandles)) {
       // Hover/cursor-only rebuild: never re-aggregate or touch the viewport.
@@ -177,6 +190,111 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
         previousTimeframe: oldWidget.node.timeframe,
       );
     }
+  }
+
+  void _recomputeIndicators() {
+    final Map<String, List<double?>> series = <String, List<double?>>{};
+    final List<IndicatorSeries> ema = <IndicatorSeries>[];
+    final List<IndicatorSeries> rsi = <IndicatorSeries>[];
+    for (final IndicatorConfig config in widget.node.indicators) {
+      final List<double?> values = config.type == IndicatorType.ema
+          ? BarAggregator.computeEma(_candles, config.period)
+          : BarAggregator.computeRsi(_candles, config.period);
+      series[config.id] = values;
+      final IndicatorSeries overlay = (config: config, series: values);
+      if (config.type == IndicatorType.ema) {
+        ema.add(overlay);
+      } else {
+        rsi.add(overlay);
+      }
+    }
+    _indicatorSeries = series;
+    _emaOverlays = ema;
+    _rsiOverlays = rsi;
+  }
+
+  Future<void> _openAddIndicator() async {
+    final IndicatorConfig? config = await showIndicatorConfigDialog(
+      context: context,
+      theme: widget.theme,
+    );
+    if (config == null || !mounted) return;
+    widget.onUpdatePane(
+      widget.node.copyWith(
+        indicators: <IndicatorConfig>[...widget.node.indicators, config],
+      ),
+    );
+  }
+
+  Future<void> _editIndicator(IndicatorConfig config) async {
+    final IndicatorConfig? updated = await showIndicatorConfigDialog(
+      context: context,
+      theme: widget.theme,
+      initial: config,
+    );
+    if (updated == null || !mounted) return;
+    widget.onUpdatePane(
+      widget.node.copyWith(
+        indicators: widget.node.indicators
+            .map((c) => c.id == config.id ? updated : c)
+            .toList(),
+      ),
+    );
+  }
+
+  void _toggleIndicator(IndicatorConfig config) {
+    widget.onUpdatePane(
+      widget.node.copyWith(
+        indicators: widget.node.indicators
+            .map((c) => c.id == config.id ? c.copyWith(visible: !c.visible) : c)
+            .toList(),
+      ),
+    );
+  }
+
+  void _removeIndicator(IndicatorConfig config) {
+    widget.onUpdatePane(
+      widget.node.copyWith(
+        indicators:
+            widget.node.indicators.where((c) => c.id != config.id).toList(),
+      ),
+    );
+  }
+
+  void _onRsiPointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    _pointerKinds[event.pointer] = event.kind;
+    if (_pointers.length == 1) {
+      _downPos = event.localPosition;
+      _snapshotScaleStart(event.localPosition);
+    } else if (_pointers.length == 2) {
+      _touchLongPressTimer?.cancel();
+      _touchLongPressTimer = null;
+      _longPressActive = false;
+      final List<Offset> pts = _firstTwoPointers.toList();
+      _pinchStartDistance = math.max((pts[0] - pts[1]).distance, 1.0);
+      _snapshotScaleStart(_pointerMidpoint);
+    }
+  }
+
+  void _onRsiHover(Offset local) {
+    setState(() => _rsiCursorPos = local);
+    if (_chartSize.width <= 0 || _candles.isEmpty) return;
+    final int idx = _viewport.xToIndex(local.dx, _chartSize.width).round();
+    if (idx >= 0 && idx < _candles.length) {
+      final DateTime start = _candles[idx].time;
+      widget.onHoverRangeChanged(
+        DateTimeRange(
+          start: start,
+          end: start.add(widget.node.timeframe.duration),
+        ),
+      );
+    }
+  }
+
+  void _onRsiExit() {
+    setState(() => _rsiCursorPos = null);
+    widget.onHoverRangeChanged(null);
   }
 
   bool _sliceChanged(List<Candle> a, List<Candle> b) {
@@ -239,6 +357,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
       autoScaleY: true,
     );
     _viewport.fitPriceToVisible(_candles);
+    _recomputeIndicators();
   }
 
   // --------------------------------------------------------------------------
@@ -782,17 +901,15 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   @override
   Widget build(BuildContext context) {
     final t = widget.theme;
-    final ema20 =
-        widget.node.showEma20 ? BarAggregator.computeEma(_candles, 20) : null;
-    final ema50 =
-        widget.node.showEma50 ? BarAggregator.computeEma(_candles, 50) : null;
-    final ema200 =
-        widget.node.showEma200 ? BarAggregator.computeEma(_candles, 200) : null;
 
     Candle? hovered;
+    int? hoverIdx;
     if (_cursorPos != null && _chartSize.width > 0 && _candles.isNotEmpty) {
       final idx = _viewport.xToIndex(_cursorPos!.dx, _chartSize.width).round();
-      if (idx >= 0 && idx < _candles.length) hovered = _candles[idx];
+      if (idx >= 0 && idx < _candles.length) {
+        hovered = _candles[idx];
+        hoverIdx = idx;
+      }
     }
 
     return Container(
@@ -807,13 +924,23 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
               builder: (context, constraints) {
                 final double chartW =
                     math.max(1.0, constraints.maxWidth - priceAxisWidth);
-                final double chartH =
+                final bool hasRsi =
+                    _rsiOverlays.any((overlay) => overlay.config.visible);
+                final double usableH =
                     math.max(1.0, constraints.maxHeight - timeAxisHeight);
-                _chartSize = Size(chartW, chartH);
+                final double dividerH = hasRsi ? 1.0 : 0.0;
+                final double mainH = hasRsi
+                    ? math.max(1.0, (usableH - dividerH) * 0.75)
+                    : usableH;
+                final double rsiH = hasRsi
+                    ? math.max(1.0, usableH - dividerH - mainH)
+                    : 0.0;
+                _chartSize = Size(chartW, mainH);
 
                 return Column(
                   children: [
                     Expanded(
+                      flex: hasRsi ? 3 : 1,
                       child: Row(
                         children: [
                           Expanded(
@@ -861,9 +988,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                             theme: t,
                                             paths: widget.paths,
                                             activePath: widget.activePath,
-                                            ema20: ema20,
-                                            ema50: ema50,
-                                            ema200: ema200,
+                                            emaOverlays: _emaOverlays,
                                             syncedCursorRange:
                                                 widget.syncedCursorRange,
                                             barDuration:
@@ -927,6 +1052,21 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                                 ),
                                               ),
                                             ),
+                                        if (widget.node.indicators.isNotEmpty)
+                                          Positioned(
+                                            top: 26,
+                                            left: 8,
+                                            child: _IndicatorLegend(
+                                              theme: t,
+                                              indicators:
+                                                  widget.node.indicators,
+                                              series: _indicatorSeries,
+                                              hoverIndex: hoverIdx,
+                                              onToggle: _toggleIndicator,
+                                              onEdit: _editIndicator,
+                                              onRemove: _removeIndicator,
+                                            ),
+                                          ),
                                       ],
                                     ),
                                   ),
@@ -946,7 +1086,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                 onDoubleTap: _onAutoFit,
                                 child: ClipRect(
                                   child: CustomPaint(
-                                    size: Size(priceAxisWidth, chartH),
+                                    size: Size(priceAxisWidth, mainH),
                                     painter: PriceAxisPainter(
                                       viewport: _viewport,
                                       cursorPos: _cursorPos,
@@ -961,6 +1101,62 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                         ],
                       ),
                     ),
+                    if (hasRsi) ...[
+                      Container(height: 1, color: t.border),
+                      Expanded(
+                        flex: 1,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                onPointerSignal: _onChartWheel,
+                                onPointerDown: _onRsiPointerDown,
+                                onPointerMove: _onPointerMove,
+                                onPointerUp: _onPointerUp,
+                                onPointerCancel: _onPointerCancel,
+                                child: MouseRegion(
+                                  cursor: SystemMouseCursors.precise,
+                                  onHover: (e) => _onRsiHover(e.localPosition),
+                                  onExit: (_) => _onRsiExit(),
+                                  child: ClipRect(
+                                    child: CustomPaint(
+                                      size: Size(chartW, rsiH),
+                                      painter: RsiSubPanePainter(
+                                        candles: _candles,
+                                        viewport: _viewport,
+                                        rsiOverlays: _rsiOverlays,
+                                        cursorPos: _rsiCursorPos,
+                                        syncedCursorRange:
+                                            widget.syncedCursorRange,
+                                        theme: t,
+                                        barDuration:
+                                            widget.node.timeframe.duration,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: priceAxisWidth,
+                              child: ClipRect(
+                                child: CustomPaint(
+                                  size: Size(priceAxisWidth, rsiH),
+                                  painter: RsiAxisPainter(
+                                    viewport: _viewport,
+                                    rsiOverlays: _rsiOverlays,
+                                    cursorPos: _rsiCursorPos,
+                                    chartWidth: chartW,
+                                    theme: t,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     SizedBox(
                       height: timeAxisHeight,
                       child: Row(
@@ -1062,33 +1258,10 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                   ),
                   const SizedBox(width: 4),
                   _PaneHeaderChip(
-                    label: 'E20',
-                    active: n.showEma20,
+                    label: '+ Ind',
                     theme: t,
-                    tooltip: 'Toggle EMA 20',
-                    onTap: () => widget.onUpdatePane(
-                      n.copyWith(showEma20: !n.showEma20),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  _PaneHeaderChip(
-                    label: 'E50',
-                    active: n.showEma50,
-                    theme: t,
-                    tooltip: 'Toggle EMA 50',
-                    onTap: () => widget.onUpdatePane(
-                      n.copyWith(showEma50: !n.showEma50),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  _PaneHeaderChip(
-                    label: 'E200',
-                    active: n.showEma200,
-                    theme: t,
-                    tooltip: 'Toggle EMA 200',
-                    onTap: () => widget.onUpdatePane(
-                      n.copyWith(showEma200: !n.showEma200),
-                    ),
+                    tooltip: 'Add Indicator',
+                    onTap: _openAddIndicator,
                   ),
                   const SizedBox(width: 4),
                   _PaneHeaderChip(
@@ -1129,6 +1302,150 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
     );
   }
 
+}
+
+class _IndicatorLegend extends StatelessWidget {
+  final ChartTheme theme;
+  final List<IndicatorConfig> indicators;
+  final Map<String, List<double?>> series;
+  final int? hoverIndex;
+  final ValueChanged<IndicatorConfig> onToggle;
+  final ValueChanged<IndicatorConfig> onEdit;
+  final ValueChanged<IndicatorConfig> onRemove;
+
+  const _IndicatorLegend({
+    required this.theme,
+    required this.indicators,
+    required this.series,
+    required this.hoverIndex,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final IndicatorConfig config in indicators)
+          _IndicatorLegendRow(
+            theme: theme,
+            config: config,
+            valueText: _valueText(config),
+            onToggle: () => onToggle(config),
+            onEdit: () => onEdit(config),
+            onRemove: () => onRemove(config),
+          ),
+      ],
+    );
+  }
+
+  String _valueText(IndicatorConfig config) {
+    final List<double?>? values = series[config.id];
+    if (values == null || values.isEmpty) return '—';
+    final int idx =
+        (hoverIndex ?? values.length - 1).clamp(0, values.length - 1);
+    final double? value = values[idx];
+    return value == null ? '—' : value.toStringAsFixed(2);
+  }
+}
+
+class _IndicatorLegendRow extends StatefulWidget {
+  final ChartTheme theme;
+  final IndicatorConfig config;
+  final String valueText;
+  final VoidCallback onToggle;
+  final VoidCallback onEdit;
+  final VoidCallback onRemove;
+
+  const _IndicatorLegendRow({
+    required this.theme,
+    required this.config,
+    required this.valueText,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  @override
+  State<_IndicatorLegendRow> createState() => _IndicatorLegendRowState();
+}
+
+class _IndicatorLegendRowState extends State<_IndicatorLegendRow> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final ChartTheme t = widget.theme;
+    final IndicatorConfig c = widget.config;
+    final bool active = c.visible;
+    final Color color = Color(c.colorValue);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: _hovered
+              ? t.background.withValues(alpha: 0.9)
+              : Colors.transparent,
+          border: Border.all(
+            color: _hovered ? t.gridLine : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 2,
+              color: color.withValues(alpha: active ? 1.0 : 0.35),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              c.displayLabel,
+              style: TextStyle(
+                color: active ? t.textPrimary : t.textSecondary,
+                fontFamily: t.fontFamily,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                decoration: active ? null : TextDecoration.lineThrough,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              widget.valueText,
+              style: TextStyle(
+                color: color.withValues(alpha: active ? 1.0 : 0.5),
+                fontFamily: t.fontFamily,
+                fontSize: 10,
+              ),
+            ),
+            if (_hovered) ...[
+              const SizedBox(width: 4),
+              _action(Icons.visibility_outlined, widget.onToggle, t),
+              _action(Icons.settings_outlined, widget.onEdit, t),
+              _action(Icons.close, widget.onRemove, t),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _action(IconData icon, VoidCallback onTap, ChartTheme t) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Icon(icon, size: 12, color: t.textSecondary),
+      ),
+    );
+  }
 }
 
 class _PaneHeaderChip extends StatefulWidget {

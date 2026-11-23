@@ -7,6 +7,7 @@ import '../../../core/theme/chart_theme.dart';
 import '../../../domain/models/candle.dart';
 import '../../../domain/models/display_timezone.dart';
 import '../../../domain/models/drawing.dart';
+import '../../../domain/models/indicator.dart';
 import '../../../domain/models/order.dart';
 import 'chart_viewport.dart';
 
@@ -157,9 +158,7 @@ class MainChartPainter extends CustomPainter {
   final ChartTheme theme;
   final List<CrossTimeframePath> paths;
   final CrossTimeframePath? activePath;
-  final List<double?>? ema20;
-  final List<double?>? ema50;
-  final List<double?>? ema200;
+  final List<({IndicatorConfig config, List<double?> series})> emaOverlays;
   final DateTimeRange? syncedCursorRange;
   final Duration? barDuration;
   final bool showVolume;
@@ -178,9 +177,7 @@ class MainChartPainter extends CustomPainter {
     required this.theme,
     this.paths = const [],
     this.activePath,
-    this.ema20,
-    this.ema50,
-    this.ema200,
+    this.emaOverlays = const [],
     this.syncedCursorRange,
     this.barDuration,
     this.showVolume = false,
@@ -329,14 +326,16 @@ class MainChartPainter extends CustomPainter {
     }
 
     // EMA overlays
-    if (ema20 != null) {
-      _drawEma(canvas, size, ema20!, const Color(0xFF1B4F72));
-    }
-    if (ema50 != null) {
-      _drawEma(canvas, size, ema50!, const Color(0xFFB75500));
-    }
-    if (ema200 != null) {
-      _drawEma(canvas, size, ema200!, const Color(0xFF8E24AA));
+    for (final ({IndicatorConfig config, List<double?> series}) overlay
+        in emaOverlays) {
+      if (!overlay.config.visible) continue;
+      _drawEma(
+        canvas,
+        size,
+        overlay.series,
+        Color(overlay.config.colorValue),
+        overlay.config.strokeWidth,
+      );
     }
 
     // Order / position / SL lines and trade markers
@@ -686,12 +685,18 @@ class MainChartPainter extends CustomPainter {
     }
   }
 
-  void _drawEma(Canvas canvas, Size size, List<double?> series, Color color) {
+  void _drawEma(
+    Canvas canvas,
+    Size size,
+    List<double?> series,
+    Color color,
+    double strokeWidth,
+  ) {
     if (series.isEmpty) return;
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3;
+      ..strokeWidth = strokeWidth;
 
     bool started = false;
     for (int i = 0; i < series.length; i++) {
@@ -1037,4 +1042,239 @@ class TimeAxisPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant TimeAxisPainter oldDelegate) => true;
+}
+
+// ============================================================================
+// PAINTER D: RSI OSCILLATOR SUB-PANE
+// ============================================================================
+typedef IndicatorSeries = ({IndicatorConfig config, List<double?> series});
+
+double _rsiY(double value, double height) =>
+    height - (value.clamp(0.0, 100.0) / 100.0) * height;
+
+void _drawDashLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+  const double dash = 4.0;
+  const double gap = 3.0;
+  final double total = (p2 - p1).distance;
+  if (total == 0) return;
+  final Offset dir = (p2 - p1) / total;
+  double current = 0;
+  while (current < total) {
+    canvas.drawLine(
+      p1 + dir * current,
+      p1 + dir * math.min(current + dash, total),
+      paint,
+    );
+    current += dash + gap;
+  }
+}
+
+class RsiSubPanePainter extends CustomPainter {
+  final List<Candle> candles;
+  final ChartViewport viewport;
+  final List<IndicatorSeries> rsiOverlays;
+  final Offset? cursorPos;
+  final DateTimeRange? syncedCursorRange;
+  final ChartTheme theme;
+  final Duration? barDuration;
+
+  RsiSubPanePainter({
+    required this.candles,
+    required this.viewport,
+    required this.rsiOverlays,
+    required this.cursorPos,
+    required this.syncedCursorRange,
+    required this.theme,
+    this.barDuration,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = theme.background);
+    canvas.drawLine(
+      Offset.zero,
+      Offset(size.width, 0),
+      Paint()
+        ..color = theme.border
+        ..strokeWidth = 1.0,
+    );
+    if (size.height <= 0 || viewport.visibleBarCount <= 0) return;
+
+    double overbought = 70.0;
+    double oversold = 30.0;
+    for (final IndicatorSeries overlay in rsiOverlays) {
+      if (overlay.config.visible) {
+        overbought = overlay.config.overbought;
+        oversold = overlay.config.oversold;
+        break;
+      }
+    }
+
+    final Paint guide = Paint()
+      ..color = theme.gridLine
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    for (final double level in <double>[overbought, 50.0, oversold]) {
+      final double y = _rsiY(level, size.height);
+      _drawDashLine(canvas, Offset(0, y), Offset(size.width, y), guide);
+    }
+
+    final int first = math.max(0, viewport.startIndex.floor());
+    for (final IndicatorSeries overlay in rsiOverlays) {
+      if (!overlay.config.visible) continue;
+      final List<double?> series = overlay.series;
+      if (series.isEmpty) continue;
+      final int last = math.min(
+        series.length - 1,
+        math.max(first, viewport.endIndex.ceil()),
+      );
+      final Paint line = Paint()
+        ..color = Color(overlay.config.colorValue)
+        ..strokeWidth = overlay.config.strokeWidth
+        ..style = PaintingStyle.stroke;
+      Offset? prev;
+      for (int i = first; i <= last; i++) {
+        final double? value = series[i];
+        if (value == null) {
+          prev = null;
+          continue;
+        }
+        final Offset point = Offset(
+          viewport.indexToX(i.toDouble(), size.width),
+          _rsiY(value, size.height),
+        );
+        if (prev != null) canvas.drawLine(prev, point, line);
+        prev = point;
+      }
+    }
+
+    final Paint cursorPaint = Paint()
+      ..color = theme.crosshair.withValues(alpha: 0.7)
+      ..strokeWidth = 1.0;
+    if (cursorPos != null) {
+      final int idx =
+          viewport.xToIndex(cursorPos!.dx, size.width).round();
+      final double x = viewport.indexToX(idx.toDouble(), size.width);
+      if (x >= 0 && x <= size.width) {
+        _drawDashLine(canvas, Offset(x, 0), Offset(x, size.height), cursorPaint);
+      }
+    }
+    if (syncedCursorRange != null && candles.isNotEmpty) {
+      final double idx = resolveBarIndex(
+        syncedCursorRange!.start,
+        candles,
+        barDuration: barDuration,
+      );
+      final double x = viewport.indexToX(idx, size.width);
+      if (x >= 0 && x <= size.width) {
+        _drawDashLine(canvas, Offset(x, 0), Offset(x, size.height), cursorPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant RsiSubPanePainter old) => true;
+}
+
+class RsiAxisPainter extends CustomPainter {
+  final ChartViewport viewport;
+  final List<IndicatorSeries> rsiOverlays;
+  final Offset? cursorPos;
+  final double chartWidth;
+  final ChartTheme theme;
+
+  RsiAxisPainter({
+    required this.viewport,
+    required this.rsiOverlays,
+    required this.cursorPos,
+    required this.chartWidth,
+    required this.theme,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = theme.axisBackground,
+    );
+    canvas.drawLine(
+      Offset.zero,
+      Offset(0, size.height),
+      Paint()
+        ..color = theme.border
+        ..strokeWidth = 1.0,
+    );
+
+    for (final double level in <double>[70.0, 30.0]) {
+      final double y = _rsiY(level, size.height);
+      _axisText(
+        canvas,
+        level.toStringAsFixed(0),
+        Offset(8, y - theme.scaledFontSize(10) / 2),
+        theme.textSecondary,
+      );
+    }
+
+    IndicatorSeries? active;
+    for (final IndicatorSeries overlay in rsiOverlays) {
+      if (overlay.config.visible) {
+        active = overlay;
+        break;
+      }
+    }
+    if (active == null) return;
+    final List<double?> series = active.series;
+    int? index;
+    if (cursorPos != null && cursorPos!.dx >= 0 && cursorPos!.dx <= chartWidth) {
+      final int i = viewport.xToIndex(cursorPos!.dx, chartWidth).round();
+      if (i >= 0 && i < series.length) index = i;
+    }
+    index ??= _lastNonNull(series);
+    if (index == null) return;
+    final double? value = series[index];
+    if (value == null) return;
+
+    final double y = _rsiY(value, size.height);
+    final TextPainter tp = TextPainter(
+      text: TextSpan(
+        text: value.toStringAsFixed(1),
+        style: TextStyle(
+          color: theme.badgeText,
+          fontSize: theme.scaledFontSize(10),
+          fontFamily: theme.fontFamily,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    canvas.drawRect(
+      Rect.fromLTWH(1, y - 10, size.width - 2, 20),
+      Paint()..color = Color(active.config.colorValue),
+    );
+    tp.paint(canvas, Offset(8, y - tp.height / 2));
+  }
+
+  int? _lastNonNull(List<double?> series) {
+    for (int i = series.length - 1; i >= 0; i--) {
+      if (series[i] != null) return i;
+    }
+    return null;
+  }
+
+  void _axisText(Canvas canvas, String text, Offset offset, Color color) {
+    final TextPainter tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: theme.scaledFontSize(10),
+          fontFamily: theme.fontFamily,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, offset);
+  }
+
+  @override
+  bool shouldRepaint(covariant RsiAxisPainter old) => true;
 }
