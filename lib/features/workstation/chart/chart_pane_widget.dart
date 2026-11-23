@@ -104,6 +104,8 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   List<IndicatorSeries> _emaOverlays = const <IndicatorSeries>[];
   List<IndicatorSeries> _rsiOverlays = const <IndicatorSeries>[];
   Offset? _rsiCursorPos;
+  bool _legendHovered = false;
+  bool _legendPointerActive = false;
 
   Offset? _cursorPos;
   bool _isPanningChart = false;
@@ -262,6 +264,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   }
 
   void _onRsiPointerDown(PointerDownEvent event) {
+    if (_legendHovered || _legendPointerActive) return;
     _pointers[event.pointer] = event.localPosition;
     _pointerKinds[event.pointer] = event.kind;
     if (_pointers.length == 1) {
@@ -295,6 +298,21 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   void _onRsiExit() {
     setState(() => _rsiCursorPos = null);
     widget.onHoverRangeChanged(null);
+  }
+
+  void _enterLegend() {
+    if (_legendHovered) return;
+    _legendHovered = true;
+    setState(() {
+      _cursorPos = null;
+      _hoveringDraggableLine = false;
+    });
+    widget.onHoverRangeChanged(null);
+  }
+
+  void _exitLegend() {
+    _legendHovered = false;
+    _legendPointerActive = false;
   }
 
   bool _sliceChanged(List<Candle> a, List<Candle> b) {
@@ -590,6 +608,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    if (_legendHovered || _legendPointerActive) return;
     _pointers[event.pointer] = event.localPosition;
     _pointerKinds[event.pointer] = event.kind;
 
@@ -807,6 +826,7 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
   }
 
   void _onChartWheel(PointerSignalEvent event) {
+    if (_legendHovered || _legendPointerActive) return;
     if (event is! PointerScrollEvent || _chartSize.width <= 0) return;
 
     setState(() {
@@ -960,6 +980,9 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                             ? SystemMouseCursors.resizeUpDown
                                             : SystemMouseCursors.precise,
                                 onHover: (e) {
+                                  if (_legendHovered || _legendPointerActive) {
+                                    return;
+                                  }
                                   final bool over = _isOverDraggableLine(
                                     e.localPosition.dy,
                                   );
@@ -1056,15 +1079,38 @@ class _ChartPaneWidgetState extends State<ChartPaneWidget> {
                                           Positioned(
                                             top: 26,
                                             left: 8,
-                                            child: _IndicatorLegend(
-                                              theme: t,
-                                              indicators:
-                                                  widget.node.indicators,
-                                              series: _indicatorSeries,
-                                              hoverIndex: hoverIdx,
-                                              onToggle: _toggleIndicator,
-                                              onEdit: _editIndicator,
-                                              onRemove: _removeIndicator,
+                                            child: MouseRegion(
+                                              onEnter: (_) => _enterLegend(),
+                                              onExit: (_) => _exitLegend(),
+                                              child: Listener(
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onPointerDown: (_) {
+                                                  _legendPointerActive = true;
+                                                },
+                                                onPointerUp: (_) {
+                                                  _legendPointerActive = false;
+                                                },
+                                                onPointerCancel: (_) {
+                                                  _legendPointerActive = false;
+                                                },
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.all(2),
+                                                  color: t.background
+                                                      .withValues(alpha: 0.72),
+                                                  child: _IndicatorLegend(
+                                                    theme: t,
+                                                    indicators:
+                                                        widget.node.indicators,
+                                                    series: _indicatorSeries,
+                                                    hoverIndex: hoverIdx,
+                                                    onToggle: _toggleIndicator,
+                                                    onEdit: _editIndicator,
+                                                    onRemove: _removeIndicator,
+                                                  ),
+                                                ),
+                                              ),
                                             ),
                                           ),
                                       ],
@@ -1427,22 +1473,92 @@ class _IndicatorLegendRowState extends State<_IndicatorLegendRow> {
             ),
             if (_hovered) ...[
               const SizedBox(width: 4),
-              _action(Icons.visibility_outlined, widget.onToggle, t),
-              _action(Icons.settings_outlined, widget.onEdit, t),
-              _action(Icons.close, widget.onRemove, t),
+              _LegendActionButton(
+                icon: Icons.visibility_outlined,
+                tooltip:
+                    widget.config.visible ? 'Hide Indicator' : 'Show Indicator',
+                theme: t,
+                onTap: widget.onToggle,
+              ),
+              _LegendActionButton(
+                icon: Icons.settings_outlined,
+                tooltip: 'Indicator Settings',
+                theme: t,
+                onTap: widget.onEdit,
+              ),
+              _LegendActionButton(
+                icon: Icons.close,
+                tooltip: 'Remove Indicator',
+                theme: t,
+                destructive: true,
+                onTap: widget.onRemove,
+              ),
             ],
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _action(IconData icon, VoidCallback onTap, ChartTheme t) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2),
-        child: Icon(icon, size: 12, color: t.textSecondary),
+class _LegendActionButton extends StatefulWidget {
+  final IconData icon;
+  final String tooltip;
+  final ChartTheme theme;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  const _LegendActionButton({
+    required this.icon,
+    required this.tooltip,
+    required this.theme,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  @override
+  State<_LegendActionButton> createState() => _LegendActionButtonState();
+}
+
+class _LegendActionButtonState extends State<_LegendActionButton> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final ChartTheme t = widget.theme;
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 300),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: _isHovered
+                  ? t.activePillBackground.withValues(alpha: 0.16)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(
+                color: _isHovered
+                    ? t.activePillBackground.withValues(alpha: 0.55)
+                    : Colors.transparent,
+                width: 0.8,
+              ),
+            ),
+            child: Icon(
+              widget.icon,
+              size: 12,
+              color: _isHovered
+                  ? (widget.destructive ? t.bearBorder : t.textPrimary)
+                  : t.textSecondary,
+            ),
+          ),
+        ),
       ),
     );
   }
